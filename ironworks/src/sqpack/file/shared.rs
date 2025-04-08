@@ -1,5 +1,7 @@
 use binrw::binread;
 
+use crate::utility::SizedRead;
+
 #[binread]
 #[derive(Debug)]
 #[br(little)]
@@ -11,6 +13,10 @@ pub struct Header {
 	// block_buffer_size: u32,
 	#[br(pad_before = 8)]
 	pub block_count: u32,
+}
+
+impl SizedRead for Header {
+	const SIZE: usize = 24;
 }
 
 #[binread]

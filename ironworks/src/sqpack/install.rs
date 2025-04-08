@@ -1,7 +1,7 @@
+use futures_util::io;
 use std::{
 	ffi::OsStr,
 	fs,
-	io::{self, Seek},
 	path::{Path, PathBuf},
 };
 
@@ -26,7 +26,7 @@ const SQPACK_PATH: &[&str] = &["game", "sqpack"];
 
 #[allow(dead_code)]
 #[derive(Debug)]
-enum Platform {
+pub enum Platform {
 	Win32 = 0,
 	PS3 = 1,
 	PS4 = 2,

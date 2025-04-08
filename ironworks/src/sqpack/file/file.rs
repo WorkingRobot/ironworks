@@ -1,8 +1,9 @@
 use std::io::{Cursor, Empty, Read, Seek, SeekFrom};
 
 use binrw::BinRead;
+use futures_util::{AsyncRead, AsyncSeek};
 
-use crate::{error::Result, sqpack::block::BlockStream};
+use crate::{error::Result, sqpack::block::BlockStream, utility::SizedReadExt};
 
 use super::{
 	empty, model,
@@ -17,16 +18,16 @@ pub struct File<R> {
 	inner: FileStreamKind<R>,
 }
 
-impl<R: Read + Seek> File<R> {
+impl<R: AsyncRead + AsyncSeek + Unpin> File<R> {
 	/// Create a new File which which will translate SqPack stored data in the given stream.
-	pub fn new(mut reader: R) -> Result<Self> {
+	pub async fn new(mut reader: R) -> Result<Self> {
 		// Read in the header.
-		let header = Header::read(&mut reader)?;
+		let header = Header::read_async(&mut reader).await?;
 
 		use FileStreamKind as FSK;
 		let file_stream = match &header.kind {
-			FileKind::Empty => FSK::Empty(empty::read(reader, header)?),
-			FileKind::Standard => FSK::Standard(standard::read(reader, header.size, header)?),
+			FileKind::Empty => FSK::Empty(empty::read(reader, header).await?),
+			FileKind::Standard => FSK::Standard(standard::read(reader, header.size, header).await?),
 			FileKind::Model => FSK::Model(model::read(reader, header.size, header)?),
 			FileKind::Texture => FSK::Texture(texture::read(reader, header.size, header)?),
 		};

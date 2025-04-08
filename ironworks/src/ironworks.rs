@@ -1,5 +1,6 @@
 use std::io::{Read, Seek};
 
+use async_trait::async_trait;
 use derivative::Derivative;
 
 use crate::{
@@ -13,34 +14,35 @@ impl<T> FileStream for T where T: Read + Seek + 'static {}
 
 // TODO: This shares name with sqpack::resource. conceptually it's similar but also kinda not. thoughts?
 /// Resource layer that can provide data to an ironworks instance.
-pub trait Resource: Send + Sync + 'static {
+#[async_trait(?Send)]
+pub trait Resource: 'static {
 	/// Get the version string for the file at `path`. A return value of
 	/// `Err(Error::NotFound(ErrorValue::Path(_)))` will result in lookups
 	/// continuing to the next resource.
-	fn version(&self, path: &str) -> Result<String>;
+	async fn version(&self, path: &str) -> Result<String>;
 
 	/// Get a data stream for the file at `path`. A return value of
 	/// `Err(Error::NotFound(ErrorValue::Path(_)))` will result in lookups
 	/// continuing to the next resource.
-	fn file(&self, path: &str) -> Result<Box<dyn FileStream>>;
+	async fn file(&self, path: &str) -> Result<Box<dyn FileStream>>;
 }
 
 /// Core ironworks struct. Add one or more resources to query files.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Ironworks {
+pub struct Ironworks<R: Resource> {
 	#[derivative(Debug = "ignore")]
-	resources: Vec<Box<dyn Resource>>,
+	resources: Vec<R>,
 	// todo: does this own the file cache, then?
 }
 
-impl Default for Ironworks {
+impl<R: Resource> Default for Ironworks<R> {
 	fn default() -> Self {
 		Self::new()
 	}
 }
 
-impl Ironworks {
+impl<R: Resource> Ironworks<R> {
 	/// Build a new instance of ironworks.
 	pub fn new() -> Self {
 		Self {
@@ -51,16 +53,16 @@ impl Ironworks {
 	/// Add a resource to search for files. Resources are searched last-first; the
 	/// last resource added to ironworks that provides a requested path will be
 	/// the resource that is utilised.
-	pub fn add_resource(&mut self, resource: impl Resource) {
-		self.resources.push(Box::new(resource));
+	pub fn add_resource(&mut self, resource: R) {
+		self.resources.push(resource);
 	}
 
 	/// Add a resource to search for files. Resources are searched last-first; the
 	/// last resource added to ironworks that provides a requested path will be
 	/// the resource that is utilised.
 	#[must_use]
-	pub fn with_resource(mut self, resource: impl Resource) -> Self {
-		self.resources.push(Box::new(resource));
+	pub fn with_resource(mut self, resource: R) -> Self {
+		self.resources.push(resource);
 		self
 	}
 
@@ -78,7 +80,7 @@ impl Ironworks {
 
 	fn find_first<F, O>(&self, path: &str, f: F) -> Result<O>
 	where
-		F: Fn(&Box<dyn Resource>) -> Result<O>,
+		F: Fn(&R) -> Result<O>,
 	{
 		self.resources
 			.iter()

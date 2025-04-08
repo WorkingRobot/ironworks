@@ -6,6 +6,7 @@ use std::{
 use derivative::Derivative;
 
 use crate::{
+	Resource,
 	error::{Error, ErrorValue, Result},
 	file::exl,
 	ironworks::Ironworks,
@@ -22,9 +23,9 @@ use super::{
 /// An Excel database.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Excel {
+pub struct Excel<R: Resource> {
 	#[derivative(Debug = "ignore")]
-	ironworks: Arc<Ironworks>,
+	ironworks: Arc<Ironworks<R>>,
 
 	default_language: Language,
 
@@ -34,9 +35,9 @@ pub struct Excel {
 	sheets: HashMapCache<String, SheetCache>,
 }
 
-impl Excel {
+impl<R: Resource> Excel<R> {
 	/// Build an view into the Excel database for a given ironworks instance.
-	pub fn new(ironworks: impl Into<Arc<Ironworks>>) -> Self {
+	pub fn new(ironworks: impl Into<Arc<Ironworks<R>>>) -> Self {
 		Self {
 			ironworks: ironworks.into(),
 
@@ -78,7 +79,7 @@ impl Excel {
 	}
 
 	/// Fetch a sheet from the database.
-	pub fn sheet<S: SheetMetadata>(&self, metadata: S) -> Result<Sheet<S>> {
+	pub fn sheet<S: SheetMetadata>(&self, metadata: S) -> Result<Sheet<S, R>> {
 		let name = metadata.name();
 
 		let list = self.list()?;

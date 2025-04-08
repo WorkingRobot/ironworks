@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+	Resource,
 	error::{Error, ErrorValue, Result},
 	file::{exd, exh},
 };
@@ -9,8 +10,8 @@ use super::{metadata::SheetMetadata, sheet::Sheet};
 
 /// Iterator over the rows in a sheet.
 #[derive(Debug)]
-pub struct SheetIterator<S> {
-	sheet: Sheet<S>,
+pub struct SheetIterator<S, R: Resource> {
+	sheet: Sheet<S, R>,
 
 	page_index: usize,
 	row_index: usize,
@@ -20,8 +21,8 @@ pub struct SheetIterator<S> {
 	subrow_max: Option<u16>,
 }
 
-impl<S: SheetMetadata> SheetIterator<S> {
-	pub(super) fn new(sheet: Sheet<S>) -> Self {
+impl<S: SheetMetadata, R: Resource> SheetIterator<S, R> {
+	pub(super) fn new(sheet: Sheet<S, R>) -> Self {
 		Self {
 			sheet,
 
@@ -35,7 +36,7 @@ impl<S: SheetMetadata> SheetIterator<S> {
 	}
 }
 
-impl<S: SheetMetadata> Iterator for SheetIterator<S> {
+impl<S: SheetMetadata, R: Resource> Iterator for SheetIterator<S, R> {
 	type Item = S::Row;
 
 	fn next(&mut self) -> Option<Self::Item> {
@@ -61,7 +62,7 @@ impl<S: SheetMetadata> Iterator for SheetIterator<S> {
 	}
 }
 
-impl<S: SheetMetadata> SheetIterator<S> {
+impl<S: SheetMetadata, R: Resource> SheetIterator<S, R> {
 	fn step(&mut self) -> Result<()> {
 		self.subrow_id += 1;
 

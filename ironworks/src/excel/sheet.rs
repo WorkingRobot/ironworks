@@ -7,6 +7,7 @@ use derivative::Derivative;
 use num_enum::TryFromPrimitive;
 
 use crate::{
+	Resource,
 	error::{Error, ErrorValue, Result},
 	file::{exd, exh},
 	ironworks::Ironworks,
@@ -17,9 +18,9 @@ use super::{iterator::SheetIterator, language::Language, metadata::SheetMetadata
 /// A sheet within an Excel database.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Sheet<S> {
+pub struct Sheet<S, R: Resource> {
 	#[derivative(Debug = "ignore")]
-	ironworks: Arc<Ironworks>,
+	ironworks: Arc<Ironworks<R>>,
 
 	metadata: S,
 	pub(super) default_language: Language,
@@ -28,9 +29,9 @@ pub struct Sheet<S> {
 	cache: Arc<SheetCache>,
 }
 
-impl<S: SheetMetadata> Sheet<S> {
+impl<S: SheetMetadata, R: Resource> Sheet<S, R> {
 	pub(crate) fn new(
-		ironworks: Arc<Ironworks>,
+		ironworks: Arc<Ironworks<R>>,
 		metadata: S,
 		default_language: Language,
 		cache: Arc<SheetCache>,
@@ -202,9 +203,9 @@ impl<S: SheetMetadata> Sheet<S> {
 	}
 }
 
-impl<S: SheetMetadata> IntoIterator for Sheet<S> {
+impl<S: SheetMetadata, R: Resource> IntoIterator for Sheet<S, R> {
 	type Item = S::Row;
-	type IntoIter = SheetIterator<S>;
+	type IntoIter = SheetIterator<S, R>;
 
 	fn into_iter(self) -> Self::IntoIter {
 		SheetIterator::new(self)

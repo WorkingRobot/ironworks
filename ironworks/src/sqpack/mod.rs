@@ -6,6 +6,7 @@ mod index;
 mod install;
 mod resource;
 mod sqpack;
+mod virtual_install;
 
 pub use {
 	block::{BlockMetadata, BlockPayload, BlockStream},
@@ -14,6 +15,7 @@ pub use {
 	install::Install,
 	resource::Resource,
 	sqpack::SqPack,
+	virtual_install::{VirtualFilesystem, VirtualInstall},
 };
 
 #[cfg(test)]

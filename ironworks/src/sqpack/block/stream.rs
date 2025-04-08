@@ -1,5 +1,7 @@
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
+use futures_util::{AsyncRead, AsyncSeek};
+
 use super::block::BlockPayload;
 
 /// Metadata about a block that comprises part of a data stream.
@@ -35,7 +37,7 @@ pub struct BlockStream<R> {
 
 impl<R> BlockStream<R>
 where
-	R: Read + Seek,
+	R: AsyncRead + AsyncSeek + Unpin,
 {
 	/// Create a new block stream reader.
 	pub fn new(dat_reader: R, origin: usize, metadata: Vec<BlockMetadata>) -> Self {

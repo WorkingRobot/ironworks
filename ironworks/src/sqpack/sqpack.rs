@@ -1,5 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 
+use async_trait::async_trait;
+
 use crate::{
 	Resource,
 	error::{Error, ErrorValue, Result},
@@ -58,13 +60,13 @@ impl<R: sqpack::Resource> SqPack<R> {
 	}
 
 	/// Get the version string for the file at `path`.
-	pub fn version(&self, path: &str) -> Result<String> {
+	pub async fn version(&self, path: &str) -> Result<String> {
 		let (repository, _) = self.path_metadata(&path.to_lowercase())?;
-		self.resource.version(repository)
+		self.resource.version(repository).await
 	}
 
 	/// Read the file at `path` from SqPack.
-	pub fn file(&self, path: &str) -> Result<File<R::File>> {
+	pub async fn file(&self, path: &str) -> Result<File<R::File>> {
 		// SqPack paths are always lower case.
 		let path = path.to_lowercase();
 
@@ -79,7 +81,7 @@ impl<R: sqpack::Resource> SqPack<R> {
 			.find(&path)?;
 
 		// Build a File representation.
-		let dat = self.resource.file(repository, category, location)?;
+		let dat = self.resource.file(repository, category, location).await?;
 
 		// TODO: Cache files? Tempted to say it's the IW struct's responsibility. Is it even possible here with streams?
 		File::new(dat)
@@ -113,15 +115,16 @@ impl<R: sqpack::Resource> SqPack<R> {
 }
 
 // TODO: work out the resource story for this because it's gonna get cluttery if im not careful
+#[async_trait(?Send)]
 impl<R> Resource for SqPack<R>
 where
-	R: sqpack::Resource + Send + Sync + 'static,
+	R: sqpack::Resource + 'static,
 {
-	fn version(&self, path: &str) -> Result<String> {
-		self.version(path)
+	async fn version(&self, path: &str) -> Result<String> {
+		self.version(path).await
 	}
 
-	fn file(&self, path: &str) -> Result<Box<dyn FileStream>> {
-		Ok(Box::new(self.file(path)?))
+	async fn file(&self, path: &str) -> Result<Box<dyn FileStream>> {
+		Ok(Box::new(self.file(path).await?))
 	}
 }

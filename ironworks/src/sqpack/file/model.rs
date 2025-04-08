@@ -1,8 +1,13 @@
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
 use binrw::{BinRead, BinWriterExt, VecArgs, binread};
+use futures_util::{AsyncRead, AsyncSeek};
 
-use crate::{error::Result, sqpack::block::read_block};
+use crate::{
+	error::Result,
+	sqpack::block::read_block,
+	utility::{SizedRead, SizedReadExt},
+};
 
 use super::shared::Header;
 
@@ -25,6 +30,10 @@ struct ModelHeader {
 	_padding: u8,
 }
 
+impl SizedRead for ModelHeader {
+	const SIZE: usize = SectionInfo::<u32>::SIZE * 3 + SectionInfo::<u16>::SIZE * 2 + 2 + 2 + 4;
+}
+
 #[binread]
 #[derive(Debug)]
 #[br(little)]
@@ -36,8 +45,16 @@ struct SectionInfo<T: for<'a> BinRead<Args<'a> = ()> + 'static> {
 	index_buffer: [T; MAX_LODS],
 }
 
-pub fn read(mut reader: impl Read + Seek, offset: u32, header: Header) -> Result<Cursor<Vec<u8>>> {
-	let model_header = ModelHeader::read(&mut reader)?;
+impl<T: for<'a> BinRead<Args<'a> = ()> + 'static> SizedRead for SectionInfo<T> {
+	const SIZE: usize = std::mem::size_of::<T>() * (1 + 1 + 3 * MAX_LODS);
+}
+
+pub async fn read<R: AsyncRead + AsyncSeek + Unpin>(
+	mut reader: R,
+	offset: u32,
+	header: Header,
+) -> Result<Cursor<Vec<u8>>> {
+	let model_header = ModelHeader::read_async(&mut reader).await?;
 
 	// Model header is followed by an array of block sizes.
 	let block_counts = &model_header.block_count;
@@ -167,7 +184,7 @@ fn read_blocks(
 	block_index: u16,
 	section_offset: u32,
 	block_sizes: &[u16],
-	reader: &mut (impl Read + Seek),
+	reader: &mut (impl AsyncRead + AsyncSeek + Unpin),
 	writer: &mut impl Write,
 ) -> Result<u32> {
 	let size = (0..block_count)
