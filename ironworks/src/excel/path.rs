@@ -18,7 +18,7 @@ pub fn exd(sheet: &str, start_id: u32, language: Language) -> String {
 		L::French => "_fr",
 		L::ChineseSimplified => "_chs",
 		L::ChineseTraditional => "_cht",
-		L::Korean => "_kr",
+		L::Korean => "_ko",
 		L::TaiwanChinese => "_tc",
 	};
 
