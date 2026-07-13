@@ -85,6 +85,30 @@ impl<R: sqpack::Resource> SqPack<R> {
 		File::new(dat)
 	}
 
+	/// Check whether the file at `path` exists, using an index lookup only (the
+	/// file's data is never read).
+	pub fn exists(&self, path: &str) -> Result<bool> {
+		let path = path.to_lowercase();
+
+		let (repository, category) = match self.path_metadata(&path) {
+			Ok(metadata) => metadata,
+			Err(Error::NotFound(_)) => return Ok(false),
+			Err(error) => return Err(error),
+		};
+
+		match self
+			.indexes
+			.try_get_or_insert((repository, category), || {
+				Index::new(repository, category, self.resource.clone())
+			})?
+			.find(&path)
+		{
+			Ok(_) => Ok(true),
+			Err(Error::NotFound(_)) => Ok(false),
+			Err(error) => Err(error),
+		}
+	}
+
 	fn path_metadata(&self, path: &str) -> Result<(u8, u8)> {
 		// NOTE: This could be technically-faster by doing that cursed logic the
 		// game does, checking the first 3 characters for category and such - but I
@@ -123,5 +147,9 @@ where
 
 	fn file(&self, path: &str) -> Result<Box<dyn FileStream>> {
 		Ok(Box::new(self.file(path)?))
+	}
+
+	fn exists(&self, path: &str) -> Result<bool> {
+		self.exists(path)
 	}
 }

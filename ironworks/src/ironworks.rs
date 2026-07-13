@@ -23,6 +23,17 @@ pub trait Resource: 'static {
 	/// `Err(Error::NotFound(ErrorValue::Path(_)))` will result in lookups
 	/// continuing to the next resource.
 	fn file(&self, path: &str) -> Result<Box<dyn FileStream>>;
+
+	/// Check whether the file at `path` exists, without reading its contents.
+	/// The default implementation falls back to attempting a full `file` lookup;
+	/// resources able to answer more cheaply (e.g. via an index) should override it.
+	fn exists(&self, path: &str) -> Result<bool> {
+		match self.file(path) {
+			Ok(_) => Ok(true),
+			Err(Error::NotFound(_)) => Ok(false),
+			Err(error) => Err(error),
+		}
+	}
 }
 
 impl<R: Resource + ?Sized> Resource for Box<R> {
@@ -32,6 +43,10 @@ impl<R: Resource + ?Sized> Resource for Box<R> {
 
 	fn file(&self, path: &str) -> Result<Box<dyn FileStream>> {
 		self.as_ref().file(path)
+	}
+
+	fn exists(&self, path: &str) -> Result<bool> {
+		self.as_ref().exists(path)
 	}
 }
 
@@ -86,6 +101,20 @@ impl<R: Resource> Ironworks<R> {
 	pub fn file<F: File>(&self, path: &str) -> Result<F> {
 		let stream = self.find_first(path, |resource| resource.file(path))?;
 		F::read(stream)
+	}
+
+	/// Check whether the file at `path` exists in any resource, without reading
+	/// its contents.
+	pub fn exists(&self, path: &str) -> Result<bool> {
+		for resource in self.resources.iter().rev() {
+			match resource.exists(path) {
+				Ok(true) => return Ok(true),
+				Ok(false) => continue,
+				Err(Error::NotFound(ErrorValue::Path(_))) => continue,
+				Err(error) => return Err(error),
+			}
+		}
+		Ok(false)
 	}
 
 	fn find_first<F, O>(&self, path: &str, f: F) -> Result<O>
