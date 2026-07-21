@@ -658,6 +658,7 @@ dependencies = [
  "flate2",
  "getset",
  "half",
+ "memchr",
  "modular-bitfield",
  "num_enum",
  "serde",

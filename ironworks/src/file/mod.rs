@@ -20,6 +20,8 @@ pub mod mtrl;
 pub mod patch;
 #[cfg(feature = "pbd")]
 pub mod pbd;
+#[cfg(feature = "scd")]
+pub mod scd;
 #[cfg(feature = "sklb")]
 pub mod sklb;
 #[cfg(feature = "tex")]

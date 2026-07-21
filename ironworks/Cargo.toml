@@ -36,6 +36,7 @@ mdl = ["dep:half", "dep:modular-bitfield", "dep:num_enum"]
 mtrl = []
 patch = []
 pbd = []
+scd = []
 sklb = []
 tex = ["dep:num_enum"]
 
