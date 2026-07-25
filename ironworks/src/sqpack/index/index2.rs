@@ -45,6 +45,15 @@ pub struct Index2 {
 }
 
 impl Index2 {
+	/// The hash of every file recorded in this chunk, in the order the chunk stores them.
+	pub fn hashes(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
+		self.indexes.iter().map(|entry| entry.hash)
+	}
+
+	pub fn hash(path: &str) -> u32 {
+		crc32(path.as_bytes())
+	}
+
 	// TODO: this is almost purely duplicated with index1 - dedupe somehow?
 	pub fn find(&self, path: &str) -> Result<(FileMetadata, Option<u64>)> {
 		let hash = crc32(path.as_bytes());

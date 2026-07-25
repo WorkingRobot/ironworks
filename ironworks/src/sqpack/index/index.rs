@@ -10,6 +10,31 @@ use crate::{
 
 use super::{index1::Index1, index2::Index2, shared::FileMetadata};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IndexHash {
+	/// `.index`
+	Split(u64),
+	/// `.index2`
+	Whole(u32),
+}
+
+impl IndexHash {
+	pub fn of(path: &str) -> (Option<Self>, Self) {
+		(
+			Index1::hash(path).map(Self::Split),
+			Self::Whole(Index2::hash(path)),
+		)
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IndexEntry {
+	pub repository: u8,
+	pub category: u8,
+	pub chunk: u8,
+	pub hash: IndexHash,
+}
+
 /// Specifier of a file location within a SqPack category.
 #[derive(Debug, CopyGetters)]
 #[get_copy = "pub"]
@@ -44,6 +69,31 @@ impl<R: Resource> Index<R> {
 			max_chunk: None.into(),
 			chunks: Vec::new().into(),
 		})
+	}
+
+	/// Every file this category records, across all of its chunks.
+	pub fn entries(&self) -> Result<Vec<IndexEntry>> {
+		let mut entries = Vec::new();
+		for chunk in self.chunks() {
+			let (index, chunk) = chunk?;
+			let repository = self.repository;
+			let category = self.category;
+			match &*chunk {
+				IndexChunk::Index1(file) => entries.extend(file.hashes().map(|hash| IndexEntry {
+					repository,
+					category,
+					chunk: index,
+					hash: IndexHash::Split(hash),
+				})),
+				IndexChunk::Index2(file) => entries.extend(file.hashes().map(|hash| IndexEntry {
+					repository,
+					category,
+					chunk: index,
+					hash: IndexHash::Whole(hash),
+				})),
+			}
+		}
+		Ok(entries)
 	}
 
 	pub fn find(&self, path: &str) -> Result<Location> {
@@ -100,8 +150,14 @@ impl<R: Resource> Index<R> {
 				// Found an index - save it out to the cache.
 				Ok(chunk) => {
 					let mut guard = self.chunks.lock().unwrap();
-					guard.insert(index_usize, chunk.into());
-					Some(Ok((index_u8, guard[index_usize].clone())))
+					// The lock was released while reading, so another lookup may have stored this
+					// chunk already.
+					if guard.len() == index_usize {
+						guard.push(chunk.into());
+					}
+					guard
+						.get(index_usize)
+						.map(|chunk| Ok((index_u8, chunk.clone())))
 				}
 
 				// No index was found for this chunk - mark index as the max chunk point so we don't do that again.
@@ -125,20 +181,16 @@ enum IndexChunk {
 
 impl IndexChunk {
 	fn new<R: Resource>(repository: u8, category: u8, chunk: u8, resource: &R) -> Result<Self> {
-		resource
+		let index1 = resource
 			.index(repository, category, chunk)
-			.and_then(|mut reader| {
-				let file = Index1::read(&mut reader)?;
-				Ok(IndexChunk::Index1(file))
-			})
-			.or_else(|_| {
-				resource
-					.index2(repository, category, chunk)
-					.and_then(|mut reader| {
-						let file = Index2::read(&mut reader)?;
-						Ok(IndexChunk::Index2(file))
-					})
-			})
+			.and_then(|mut reader| Ok(IndexChunk::Index1(Index1::read(&mut reader)?)));
+
+		match index1 {
+			Err(Error::NotFound(_)) => resource
+				.index2(repository, category, chunk)
+				.and_then(|mut reader| Ok(IndexChunk::Index2(Index2::read(&mut reader)?))),
+			result => result,
+		}
 	}
 
 	fn find(&self, path: &str) -> Result<(FileMetadata, Option<u64>)> {

@@ -11,7 +11,7 @@ mod vinstall;
 pub use {
 	block::{BlockMetadata, BlockPayload, BlockStream},
 	file::File,
-	index::Location,
+	index::{IndexEntry, IndexHash, Location},
 	install::Install,
 	resource::Resource,
 	sqpack::SqPack,

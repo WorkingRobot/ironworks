@@ -82,6 +82,12 @@ impl<R: Resource> Ironworks<R> {
 		self.resources.push(resource);
 	}
 
+	/// The resources this instance searches, in the order they were added. Lets a caller reach
+	/// capabilities a resource offers beyond the trait, such as enumerating a package's contents.
+	pub fn resources(&self) -> &[R] {
+		&self.resources
+	}
+
 	/// Add a resource to search for files. Resources are searched last-first; the
 	/// last resource added to ironworks that provides a requested path will be
 	/// the resource that is utilised.

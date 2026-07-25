@@ -8,7 +8,10 @@ use crate::{
 	utility::{HashMapCache, HashMapCacheExt},
 };
 
-use super::{file::File, index::Index};
+use super::{
+	file::File,
+	index::{Index, IndexEntry},
+};
 
 const CATEGORIES: &[Option<&str>] = &[
 	/* 0x00 */ Some("common"),
@@ -107,6 +110,34 @@ impl<R: sqpack::Resource> SqPack<R> {
 			Err(Error::NotFound(_)) => Ok(false),
 			Err(error) => Err(error),
 		}
+	}
+
+	/// Every file the install records, across every repository and category.
+	pub fn entries(&self) -> Result<Vec<IndexEntry>> {
+		let mut entries = Vec::new();
+		for repository in 0..u8::try_from(REPOSITORIES.len()).unwrap() {
+			for (category, name) in CATEGORIES.iter().enumerate() {
+				if name.is_none() {
+					continue;
+				}
+				let category = u8::try_from(category).unwrap();
+				let index = self.indexes.try_get_or_insert((repository, category), || {
+					Index::new(repository, category, self.resource.clone())
+				})?;
+				match index.entries() {
+					Ok(found) => entries.extend(found),
+					// A repository or category the install does not carry.
+					Err(Error::NotFound(_)) => continue,
+					Err(error) => return Err(error),
+				}
+			}
+		}
+		Ok(entries)
+	}
+
+	/// Which repository and category a path resolves to, without touching any index.
+	pub fn locate(&self, path: &str) -> Result<(u8, u8)> {
+		self.path_metadata(&path.to_lowercase())
 	}
 
 	fn path_metadata(&self, path: &str) -> Result<(u8, u8)> {

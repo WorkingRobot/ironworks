@@ -47,6 +47,21 @@ pub struct Index1 {
 }
 
 impl Index1 {
+	/// The hash of every file recorded in this chunk, in the order the chunk stores them.
+	pub fn hashes(&self) -> impl ExactSizeIterator<Item = u64> + '_ {
+		self.indexes.iter().map(|entry| entry.hash)
+	}
+
+	pub fn hash(path: &str) -> Option<u64> {
+		let mut segments = path
+			.rsplitn(2, '/')
+			.map(|segment| crc32(segment.as_bytes()));
+		match (segments.next(), segments.next()) {
+			(Some(file), Some(directory)) => Some(u64::from(directory) << 32 | u64::from(file)),
+			_ => None,
+		}
+	}
+
 	pub fn find(&self, path: &str) -> Result<(FileMetadata, Option<u64>)> {
 		// Calculate the Index1 hash of the path
 		let hashed_segments = path
