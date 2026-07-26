@@ -56,8 +56,11 @@ impl Index2 {
 
 	// TODO: this is almost purely duplicated with index1 - dedupe somehow?
 	pub fn find(&self, path: &str) -> Result<(FileMetadata, Option<u64>)> {
-		let hash = crc32(path.as_bytes());
+		self.find_hash(Self::hash(path))
+			.ok_or_else(|| Error::NotFound(ErrorValue::Path(path.into())))
+	}
 
+	pub fn find_hash(&self, hash: u32) -> Option<(FileMetadata, Option<u64>)> {
 		self.indexes
 			.iter()
 			.find(|entry| entry.hash == hash)
@@ -75,6 +78,5 @@ impl Index2 {
 
 				(metadata, size)
 			})
-			.ok_or_else(|| Error::NotFound(ErrorValue::Path(path.into())))
 	}
 }

@@ -63,23 +63,18 @@ impl Index1 {
 	}
 
 	pub fn find(&self, path: &str) -> Result<(FileMetadata, Option<u64>)> {
-		// Calculate the Index1 hash of the path
-		let hashed_segments = path
-			.rsplitn(2, '/')
-			.map(|segment| crc32(segment.as_bytes()))
-			.collect::<Vec<_>>();
+		let hash = Self::hash(path).ok_or_else(|| {
+			Error::Invalid(
+				ErrorValue::Path(path.into()),
+				"Paths must contain at least two segments.".into(),
+			)
+		})?;
 
-		let hash = match hashed_segments[..] {
-			[file, directory] => (directory as u64) << 32 | file as u64,
-			_ => {
-				return Err(Error::Invalid(
-					ErrorValue::Path(path.into()),
-					"Paths must contain at least two segments.".into(),
-				));
-			}
-		};
+		self.find_hash(hash)
+			.ok_or_else(|| Error::NotFound(ErrorValue::Path(path.into())))
+	}
 
-		// Look for a matching entry in the index table
+	pub fn find_hash(&self, hash: u64) -> Option<(FileMetadata, Option<u64>)> {
 		// TODO: hashmap this probably
 		// TODO: i saw a neat impl that was a pass-through hasher for a map to save time on hashing small values. maybe?
 		self.indexes
@@ -103,6 +98,5 @@ impl Index1 {
 
 				(metadata, size)
 			})
-			.ok_or_else(|| Error::NotFound(ErrorValue::Path(path.into())))
 	}
 }

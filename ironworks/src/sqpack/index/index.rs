@@ -25,6 +25,11 @@ impl IndexHash {
 			Self::Whole(Index2::hash(path)),
 		)
 	}
+
+	/// The hash of a directory on its own (upper half of [`Split`](Self::Split))
+	pub fn directory(path: &str) -> u32 {
+		super::crc::crc32(path.as_bytes())
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,6 +99,30 @@ impl<R: Resource> Index<R> {
 			}
 		}
 		Ok(entries)
+	}
+
+	/// Locate a file by its index hash.
+	pub fn find_hash(&self, hash: IndexHash) -> Result<Location> {
+		let location = self.chunks().find_map(|chunk| {
+			let (index, chunk) = match chunk {
+				Ok(value) => value,
+				Err(error) => return Some(Err(error)),
+			};
+
+			chunk.find_hash(hash).map(|(meta, size)| {
+				Ok(Location {
+					chunk: index,
+					data_file: meta.data_file_id,
+					offset: meta.offset,
+					size,
+				})
+			})
+		});
+
+		match location {
+			None => Err(Error::NotFound(ErrorValue::Other(format!("hash {hash:?}")))),
+			Some(result) => result,
+		}
 	}
 
 	pub fn find(&self, path: &str) -> Result<Location> {
@@ -197,6 +226,33 @@ impl IndexChunk {
 		match self {
 			Self::Index1(index) => index.find(path),
 			Self::Index2(index) => index.find(path),
+		}
+	}
+
+	fn find_hash(&self, hash: IndexHash) -> Option<(FileMetadata, Option<u64>)> {
+		match (self, hash) {
+			(Self::Index1(index), IndexHash::Split(hash)) => index.find_hash(hash),
+			(Self::Index2(index), IndexHash::Whole(hash)) => index.find_hash(hash),
+			_ => None,
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::IndexHash;
+
+	#[test]
+	fn directory_matches_the_upper_half_of_a_split_hash() {
+		for (dir, file) in [
+			("music/ffxiv", "BGM_Null.scd"),
+			("exd", "root.exl"),
+			("common/savedata", "anything.dat"),
+		] {
+			let Some(IndexHash::Split(split)) = IndexHash::of(&format!("{dir}/{file}")).0 else {
+				panic!("no split hash for {dir}/{file}");
+			};
+			assert_eq!(IndexHash::directory(dir), (split >> 32) as u32, "{dir}");
 		}
 	}
 }
