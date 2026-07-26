@@ -1,12 +1,12 @@
 //! Structs and utilities for parsing .tex files.
 
 use binrw::helpers::until_eof;
-use binrw::{BinRead, binread};
+use binrw::{binread, BinRead};
 use derivative::Derivative;
 use getset::{CopyGetters, Getters};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
-use crate::{FileStream, error::Result};
+use crate::{error::Result, FileStream};
 
 use super::file::File;
 
@@ -53,7 +53,33 @@ pub struct Texture {
 	data: Vec<u8>,
 }
 
+const HEADER_SIZE: u32 = 80;
+
 impl Texture {
+	/// Dimensions of a mipmap level. Each level halves, stopping at one pixel.
+	pub fn mip_size(&self, level: u8) -> (u16, u16) {
+		let shift = u32::from(level);
+		((self.width >> shift).max(1), (self.height >> shift).max(1))
+	}
+
+	/// Pixel data for a single mipmap level, or `None` if the file does not have that level.
+	pub fn mip_data(&self, level: u8) -> Option<&[u8]> {
+		if level >= self.mip_levels {
+			return None;
+		}
+		let offset = |level: u8| -> Option<usize> {
+			let raw = *self.surface_offsets.get(usize::from(level))?;
+			raw.checked_sub(HEADER_SIZE).map(|o| o as usize)
+		};
+		let start = offset(level)?;
+		// The next level's offset bounds this one; the last runs to the end of the data.
+		let end = match offset(level + 1) {
+			Some(end) if level + 1 < self.mip_levels && end > start => end,
+			_ => self.data.len(),
+		};
+		self.data.get(start..end.min(self.data.len()))
+	}
+
 	/// Kind of texture represented by this file.
 	pub fn kind(&self) -> TextureKind {
 		match (self.attributes & TextureKind::MASK) >> TextureKind::SHIFT {
