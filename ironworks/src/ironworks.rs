@@ -140,7 +140,8 @@ impl<R: Resource> Ironworks<R> {
 		Ok(false)
 	}
 
-	fn find_first<F, O>(&self, path: &str, f: F) -> Result<O>
+	/// Search the resources for `path`, last to first.
+	pub fn find_first<F, O>(&self, path: &str, f: F) -> Result<O>
 	where
 		F: Fn(&R) -> Result<O>,
 	{
