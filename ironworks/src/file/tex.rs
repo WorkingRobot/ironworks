@@ -1,12 +1,12 @@
 //! Structs and utilities for parsing .tex files.
 
 use binrw::helpers::until_eof;
-use binrw::{binread, BinRead};
+use binrw::{BinRead, binread};
 use derivative::Derivative;
 use getset::{CopyGetters, Getters};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
-use crate::{error::Result, FileStream};
+use crate::{FileStream, error::Result};
 
 use super::file::File;
 
@@ -36,6 +36,7 @@ pub struct Texture {
 
 	/// Mipmap level count.
 	#[get_copy = "pub"]
+	#[br(map = |x: u8| x & 127)]
 	mip_levels: u8,
 
 	/// Texture array size. Only used by D2Array texture kinds.
@@ -58,7 +59,7 @@ const HEADER_SIZE: u32 = 80;
 impl Texture {
 	/// Dimensions of a mipmap level. Each level halves, stopping at one pixel.
 	pub fn mip_size(&self, level: u8) -> (u16, u16) {
-		let shift = u32::from(level);
+		let shift = u32::from(level).min(u16::BITS - 1);
 		((self.width >> shift).max(1), (self.height >> shift).max(1))
 	}
 
@@ -78,6 +79,16 @@ impl Texture {
 			_ => self.data.len(),
 		};
 		self.data.get(start..end.min(self.data.len()))
+	}
+
+	/// How many images the file stores at each mipmap level.
+	pub fn layers(&self) -> u16 {
+		match self.kind() {
+			TextureKind::D3 => self.depth.max(1),
+			TextureKind::Cube => 6,
+			TextureKind::D2Array => u16::from(self.array_size).max(1),
+			_ => 1,
+		}
 	}
 
 	/// Kind of texture represented by this file.
