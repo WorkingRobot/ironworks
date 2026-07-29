@@ -54,6 +54,8 @@ pub mod pcb;
 pub mod phyb;
 #[cfg(feature = "scd")]
 pub mod scd;
+#[cfg(feature = "shcd")]
+pub mod shcd;
 #[cfg(feature = "shpk")]
 pub mod shpk;
 #[cfg(feature = "sklb")]

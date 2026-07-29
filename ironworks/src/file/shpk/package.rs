@@ -308,13 +308,13 @@ impl ShaderPackage {
 
 				let constants = usize::from(shader.constant_count);
 				let samplers = constants + usize::from(shader.sampler_count);
-				let uavs = samplers + usize::from(shader.uav_count);
-				let bound = uavs + usize::from(shader.texture_count);
+				let textures = samplers + usize::from(shader.texture_count);
+				let bound = textures + usize::from(shader.uav_count);
 				shaders.push(Shader {
 					stage,
 					blob_offset: shader.blob_offset,
 					blob_size: shader.blob_size,
-					bounds: [constants, samplers, uavs],
+					bounds: [constants, samplers, textures],
 					resources: resources(bytes, &mut at, bound, "shader resource table")?,
 				});
 			}
@@ -514,13 +514,13 @@ impl Shader {
 		&self.resources[self.bounds[0]..self.bounds[1]]
 	}
 
-	/// The unordered access views this shader binds.
-	pub fn uavs(&self) -> &[Resource] {
+	/// The textures this shader binds.
+	pub fn textures(&self) -> &[Resource] {
 		&self.resources[self.bounds[1]..self.bounds[2]]
 	}
 
-	/// The textures this shader binds.
-	pub fn textures(&self) -> &[Resource] {
+	/// The unordered access views this shader binds.
+	pub fn uavs(&self) -> &[Resource] {
 		&self.resources[self.bounds[2]..]
 	}
 }
