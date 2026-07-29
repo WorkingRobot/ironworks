@@ -7,6 +7,8 @@ mod animation;
 #[cfg(any(feature = "eqp", feature = "gmp"))]
 mod block_table;
 mod file;
+#[cfg(any(feature = "shcd", feature = "shpk"))]
+mod shader;
 
 #[cfg(feature = "atch")]
 pub mod atch;

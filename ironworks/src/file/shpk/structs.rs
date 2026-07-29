@@ -1,5 +1,7 @@
 use binrw::binread;
 
+use crate::file::shader::Counts;
+
 /// Versions from this one on carry hull, domain and geometry shaders, a word per shader entry, two
 /// per node, and three shader indices per pass.
 pub const VERSION_TESSELLATION: u32 = 0x0D01;
@@ -61,31 +63,11 @@ pub struct Shader {
 	pub blob_offset: u32,
 	pub blob_size: u32,
 
-	pub constant_count: u16,
-	pub sampler_count: u16,
-	pub uav_count: u16,
-	pub texture_count: u16,
+	#[br(args(true))]
+	pub counts: Counts,
 
 	#[br(if(version >= VERSION_TESSELLATION))]
 	_unknown: u32,
-}
-
-/// A constant buffer, sampler, texture or unordered access view, named by an offset into the string
-/// block.
-#[binread]
-#[br(little)]
-#[derive(Debug, Clone, Copy)]
-pub struct Resource {
-	pub id: u32,
-	pub string_offset: u32,
-	pub string_length: u16,
-	pub is_texture: u16,
-	pub slot: u16,
-	pub size: u16,
-}
-
-impl Resource {
-	pub const SIZE: usize = 16;
 }
 
 /// One value in the material parameter buffer.

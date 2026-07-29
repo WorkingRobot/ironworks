@@ -1,11 +1,17 @@
 use std::fmt;
 
-use binrw::BinRead;
 use getset::CopyGetters;
 
-use crate::{FileStream, error::Result, file::File};
+use crate::{
+	FileStream,
+	error::Result,
+	file::{
+		File,
+		shader::{Bands, DirectX, Resource, Walk, name, to_usize},
+	},
+};
 
-use super::{cursor, extent, invalid, structs, table};
+use super::structs;
 
 /// A package of compiled shaders, as named by a material.
 /// Shader bytecode is not kept.
@@ -257,9 +263,7 @@ impl ShaderPackage {
 
 	/// The name of a resource, or `None` where it points outside the string block.
 	pub fn name(&self, resource: &Resource) -> Option<&str> {
-		let start = to_usize(resource.string_offset);
-		let end = start.checked_add(usize::from(resource.string_length))?;
-		std::str::from_utf8(self.strings.get(start..end)?).ok()
+		name(&self.strings, resource)
 	}
 
 	/// The shader's default for a material parameter, or `None` where the package carries no
@@ -273,25 +277,12 @@ impl ShaderPackage {
 
 impl ShaderPackage {
 	pub fn parse(bytes: &[u8]) -> Result<Self> {
-		let mut head = cursor(bytes, 0)?;
-		let header = structs::Header::read(&mut head)?;
-		let mut at = to_usize(u32::try_from(head.position()).expect("header is small"));
+		let mut walk = Walk::new("SHPK", bytes);
+		let header = walk.read::<structs::Header>()?;
 
-		if bytes.len() < to_usize(header.total_size) {
-			return Err(invalid(format!(
-				"file declares {} bytes but carries {}",
-				header.total_size,
-				bytes.len()
-			)));
-		}
-
-		let blobs = to_usize(header.blobs_offset);
-		let strings_at = to_usize(header.strings_offset);
-		if blobs > strings_at || strings_at > bytes.len() {
-			return Err(invalid(format!(
-				"blob section {blobs:#x} and string block {strings_at:#x} do not fall in the file in that order"
-			)));
-		}
+		walk.declared_size(header.total_size)?;
+		let (blobs, strings_at) =
+			walk.sections(header.blobs_offset, header.strings_offset, "blob section")?;
 
 		let mut shaders = Vec::new();
 		for (stage, count) in [
@@ -302,94 +293,54 @@ impl ShaderPackage {
 			(Stage::Geometry, header.geometry_count),
 		] {
 			for _ in 0..count {
-				let mut entry = cursor(bytes, at)?;
-				let shader = structs::Shader::read_args(&mut entry, (header.version,))?;
-				at += to_usize(u32::try_from(entry.position()).expect("shader header is small"));
-
-				let constants = usize::from(shader.constant_count);
-				let samplers = constants + usize::from(shader.sampler_count);
-				let textures = samplers + usize::from(shader.texture_count);
-				let bound = textures + usize::from(shader.uav_count);
+				let shader = walk.read_args::<structs::Shader, _>((header.version,))?;
+				let bands = Bands::from(&shader.counts);
 				shaders.push(Shader {
 					stage,
 					blob_offset: shader.blob_offset,
 					blob_size: shader.blob_size,
-					bounds: [constants, samplers, textures],
-					resources: resources(bytes, &mut at, bound, "shader resource table")?,
+					resources: walk.resources(bands.total(), "shader resource table")?,
+					bands,
 				});
 			}
 		}
 
-		let (material_params, end) = table::<structs::MaterialParam>(
-			bytes,
-			at,
+		let material_params = walk.table::<structs::MaterialParam>(
 			usize::from(header.material_param_count),
 			structs::MaterialParam::SIZE,
 			"material parameter table",
 		)?;
-		at = end;
 
 		let param_defaults = match header.has_param_defaults {
 			0 => Vec::new(),
 			_ => {
 				let size = to_usize(header.material_params_size);
-				let end = extent(bytes, at, 1, size, "material parameter defaults")?;
-				let values = bytes[at..end]
+				let end = walk.extent(1, size, "material parameter defaults")?;
+				let values = bytes[walk.at..end]
 					.chunks_exact(4)
 					.map(|word| f32::from_le_bytes(word.try_into().expect("chunk is four bytes")))
 					.collect();
-				at = end;
+				walk.at = end;
 				values
 			}
 		};
 
-		let constants = resources(
-			bytes,
-			&mut at,
-			to_usize(header.constant_count),
-			"constant table",
-		)?;
-		let samplers = resources(
-			bytes,
-			&mut at,
-			usize::from(header.sampler_count),
-			"sampler table",
-		)?;
-		let textures = resources(
-			bytes,
-			&mut at,
-			usize::from(header.texture_count),
-			"texture table",
-		)?;
-		let uavs = resources(
-			bytes,
-			&mut at,
-			to_usize(header.uav_count),
-			"unordered access view table",
-		)?;
+		let constants = walk.resources(to_usize(header.constant_count), "constant table")?;
+		let samplers = walk.resources(usize::from(header.sampler_count), "sampler table")?;
+		let textures = walk.resources(usize::from(header.texture_count), "texture table")?;
+		let uavs = walk.resources(to_usize(header.uav_count), "unordered access view table")?;
 
-		let system_keys = keys(bytes, &mut at, header.system_key_count, "system key table")?;
-		let scene_keys = keys(bytes, &mut at, header.scene_key_count, "scene key table")?;
-		let material_keys = keys(
-			bytes,
-			&mut at,
-			header.material_key_count,
-			"material key table",
-		)?;
+		let system_keys = keys(&mut walk, header.system_key_count, "system key table")?;
+		let scene_keys = keys(&mut walk, header.scene_key_count, "scene key table")?;
+		let material_keys = keys(&mut walk, header.material_key_count, "material key table")?;
 
-		let end = extent(bytes, at, 2, 4, "subview key defaults")?;
-		let subview_defaults = [word(bytes, at), word(bytes, at + 4)];
-		at = end;
+		let end = walk.extent(2, 4, "subview key defaults")?;
+		let subview_defaults = [word(bytes, walk.at), word(bytes, walk.at + 4)];
+		walk.at = end;
 
-		let (nodes, aliases, clusters, at) = read_selectors(bytes, at, &header)?;
+		let (nodes, aliases, clusters) = read_selectors(&mut walk, &header)?;
 
-		// Nothing in the file declares its own size, so this is the only thing that catches a table
-		// walked with the wrong stride: everything above must land exactly where the blobs begin.
-		if at != blobs {
-			return Err(invalid(format!(
-				"tables end at {at:#x}, where the blob section starts at {blobs:#x}"
-			)));
-		}
+		walk.ends_at(blobs, "blob section")?;
 
 		Ok(Self {
 			version: header.version,
@@ -446,25 +397,6 @@ impl fmt::Debug for ShaderPackage {
 	}
 }
 
-/// Which DirectX a package's shaders were compiled for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DirectX {
-	Dx9,
-	Dx11,
-	/// A tag ironworks does not recognise.
-	Unknown([u8; 4]),
-}
-
-impl From<[u8; 4]> for DirectX {
-	fn from(value: [u8; 4]) -> Self {
-		match &value {
-			b"DX9\0" => Self::Dx9,
-			b"DX11" => Self::Dx11,
-			_ => Self::Unknown(value),
-		}
-	}
-}
-
 /// Which pipeline stage a shader runs at.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,62 +421,35 @@ pub struct Shader {
 	#[get_copy = "pub"]
 	blob_size: u32,
 
-	/// Where the flat resource list divides, as a running total: constants, samplers, unordered
-	/// access views, then textures.
-	bounds: [usize; 3],
-
+	bands: Bands,
 	resources: Vec<Resource>,
 }
 
 impl Shader {
-	/// What this shader binds: constant buffers, then samplers, unordered access views and textures.
+	/// What this shader binds: constant buffers, then samplers, textures and unordered access views.
 	pub fn resources(&self) -> &[Resource] {
 		&self.resources
 	}
 
-	/// The constant buffers this shader binds. A slot means nothing without the kind, and nothing
-	/// without the shader either: the same buffer sits at different slots in different shaders of
-	/// one package.
+	/// The constant buffers this shader binds.
 	pub fn constants(&self) -> &[Resource] {
-		&self.resources[..self.bounds[0]]
+		self.bands.constants(&self.resources)
 	}
 
 	/// The samplers this shader binds.
 	pub fn samplers(&self) -> &[Resource] {
-		&self.resources[self.bounds[0]..self.bounds[1]]
+		self.bands.samplers(&self.resources)
 	}
 
 	/// The textures this shader binds.
 	pub fn textures(&self) -> &[Resource] {
-		&self.resources[self.bounds[1]..self.bounds[2]]
+		self.bands.textures(&self.resources)
 	}
 
 	/// The unordered access views this shader binds.
 	pub fn uavs(&self) -> &[Resource] {
-		&self.resources[self.bounds[2]..]
+		self.bands.uavs(&self.resources)
 	}
-}
-
-/// A constant buffer, sampler, texture or unordered access view.
-///
-/// The name lives in the package's string block; [`ShaderPackage::name`] resolves it.
-#[derive(Debug, Clone, Copy, CopyGetters)]
-#[get_copy = "pub"]
-pub struct Resource {
-	/// The crc32 of the resource's name.
-	id: u32,
-
-	string_offset: u32,
-	string_length: u16,
-
-	/// Zero for a constant buffer or sampler and one for a texture.
-	is_texture: u16,
-
-	/// The register the resource binds to.
-	slot: u16,
-
-	/// Size in registers of 16 bytes for a constant buffer, and 1 otherwise.
-	size: u16,
 }
 
 /// One value in the material parameter buffer.
@@ -570,28 +475,9 @@ pub struct Key {
 	default_value: u32,
 }
 
-fn resources(bytes: &[u8], at: &mut usize, count: usize, what: &str) -> Result<Vec<Resource>> {
-	let (records, end) =
-		table::<structs::Resource>(bytes, *at, count, structs::Resource::SIZE, what)?;
-	*at = end;
-	Ok(records
-		.into_iter()
-		.map(|record| Resource {
-			id: record.id,
-			string_offset: record.string_offset,
-			string_length: record.string_length,
-			is_texture: record.is_texture,
-			slot: record.slot,
-			size: record.size,
-		})
-		.collect())
-}
-
-fn keys(bytes: &[u8], at: &mut usize, count: u32, what: &str) -> Result<Vec<Key>> {
-	let (records, end) =
-		table::<structs::Key>(bytes, *at, to_usize(count), structs::Key::SIZE, what)?;
-	*at = end;
-	Ok(records
+fn keys(walk: &mut Walk<'_>, count: u32, what: &str) -> Result<Vec<Key>> {
+	Ok(walk
+		.table::<structs::Key>(to_usize(count), structs::Key::SIZE, what)?
 		.into_iter()
 		.map(|record| Key {
 			id: record.id,
@@ -600,12 +486,12 @@ fn keys(bytes: &[u8], at: &mut usize, count: u32, what: &str) -> Result<Vec<Key>
 		.collect())
 }
 
-/// Read the node, alias and cluster tables, returning them and where they end.
+/// Read the node, alias and cluster tables.
 fn read_selectors(
-	bytes: &[u8],
-	mut at: usize,
+	walk: &mut Walk<'_>,
 	header: &structs::Header,
-) -> Result<(Vec<Node>, Vec<NodeAlias>, Vec<AliasCluster>, usize)> {
+) -> Result<(Vec<Node>, Vec<NodeAlias>, Vec<AliasCluster>)> {
+	let bytes = walk.bytes;
 	let tessellated = header.version >= structs::VERSION_TESSELLATION;
 	// The later generation widened the slot table and gave a pass a shader for each of the three
 	// stages it gained.
@@ -620,9 +506,10 @@ fn read_selectors(
 
 	let mut nodes = Vec::with_capacity(to_usize(header.node_count));
 	for _ in 0..header.node_count {
-		let head = extent(bytes, at, 1, node_prefix + key_count * 4, "node")?;
+		let at = walk.at;
+		let head = walk.extent(1, node_prefix + key_count * 4, "node")?;
 		let count = to_usize(word(bytes, at + 4));
-		let end = extent(bytes, head, count, pass_words * 4, "node pass table")?;
+		let end = walk.extent_at(head, count, pass_words * 4, "node pass table")?;
 
 		let keys = (0..key_count)
 			.map(|index| word(bytes, at + node_prefix + index * 4))
@@ -649,18 +536,15 @@ fn read_selectors(
 			keys,
 			passes,
 		});
-		at = end;
+		walk.at = end;
 	}
 
-	let (records, end) = table::<structs::Alias>(
-		bytes,
-		at,
-		to_usize(header.node_alias_count),
-		structs::Alias::SIZE,
-		"node alias table",
-	)?;
-	at = end;
-	let aliases = records
+	let aliases = walk
+		.table::<structs::Alias>(
+			to_usize(header.node_alias_count),
+			structs::Alias::SIZE,
+			"node alias table",
+		)?
 		.into_iter()
 		.map(|record| NodeAlias {
 			selector: record.selector,
@@ -672,17 +556,12 @@ fn read_selectors(
 	for _ in 0..header.node_alias_cluster_count {
 		const CLUSTER: usize = 16;
 		const SUB_CLUSTER: usize = 392;
-		let head = extent(bytes, at, 1, CLUSTER, "node alias cluster")?;
+		let at = walk.at;
+		let head = walk.extent(1, CLUSTER, "node alias cluster")?;
 		// The sub-cluster count is the third word of the header; the fourth is unidentified. Taking
 		// the wrong one reads a hash as a count.
 		let count = to_usize(word(bytes, at + 8));
-		let end = extent(
-			bytes,
-			head,
-			count,
-			SUB_CLUSTER,
-			"node alias sub-cluster table",
-		)?;
+		let end = walk.extent_at(head, count, SUB_CLUSTER, "node alias sub-cluster table")?;
 		let subclusters = (0..count)
 			.map(|index| {
 				let sub = head + index * SUB_CLUSTER;
@@ -699,10 +578,10 @@ fn read_selectors(
 			id: word(bytes, at),
 			subclusters,
 		});
-		at = end;
+		walk.at = end;
 	}
 
-	Ok((nodes, aliases, clusters, at))
+	Ok((nodes, aliases, clusters))
 }
 
 /// The half-word at `at`, which every caller has already bounds-checked.
@@ -713,8 +592,4 @@ fn half(bytes: &[u8], at: usize) -> u16 {
 /// The word at `at`, which every caller has already bounds-checked.
 fn word(bytes: &[u8], at: usize) -> u32 {
 	u32::from_le_bytes(bytes[at..at + 4].try_into().expect("four bytes"))
-}
-
-fn to_usize(value: u32) -> usize {
-	usize::try_from(value).expect("u32 fits usize")
 }
