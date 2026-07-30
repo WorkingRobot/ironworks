@@ -136,3 +136,68 @@ pub fn resolve(
 
 	Some((metadata.clone(), size))
 }
+
+#[cfg(test)]
+pub mod test {
+	use super::Synonym;
+
+	const SQPACK_HEADER: u32 = 0x400;
+	const INDEX_HEADER: u32 = 0x400;
+
+	fn section(offset: u32, size: u32) -> Vec<u8> {
+		let mut out = Vec::new();
+		out.extend(offset.to_le_bytes());
+		out.extend(size.to_le_bytes());
+		out.resize(72, 0);
+		out
+	}
+
+	/// An index file holding the given entry and synonym tables, laid out as the live files are:
+	/// each header padded out to its own declared size, then the two sections back to back.
+	pub fn index_file(indexes: &[u8], synonyms: &[u8]) -> Vec<u8> {
+		let index_offset = SQPACK_HEADER + INDEX_HEADER;
+		let synonym_offset = index_offset + u32::try_from(indexes.len()).unwrap();
+
+		let mut out = b"SqPack\0\0".to_vec();
+		out.resize(12, 0);
+		out.extend(SQPACK_HEADER.to_le_bytes());
+		out.resize(usize::try_from(SQPACK_HEADER).unwrap(), 0);
+
+		out.extend(INDEX_HEADER.to_le_bytes());
+		out.extend(1u32.to_le_bytes());
+		out.extend(section(index_offset, u32::try_from(indexes.len()).unwrap()));
+		out.extend(1u32.to_le_bytes());
+		out.extend(section(
+			synonym_offset,
+			u32::try_from(synonyms.len()).unwrap(),
+		));
+		out.resize(usize::try_from(index_offset).unwrap(), 0);
+
+		out.extend(indexes);
+		out.extend(synonyms);
+		out
+	}
+
+	/// `trailing` lands after the path's terminator, where live records keep the tail of whatever
+	/// longer path the slot held before.
+	pub fn synonym(
+		hash: u64,
+		metadata: u32,
+		conflict_index: u32,
+		path: &str,
+		trailing: &[u8],
+	) -> Vec<u8> {
+		let mut out = hash.to_le_bytes().to_vec();
+		out.extend(metadata.to_le_bytes());
+		out.extend(conflict_index.to_le_bytes());
+		out.extend(path.as_bytes());
+		out.push(0);
+		out.extend(trailing);
+		out.resize(usize::try_from(Synonym::SIZE).unwrap(), 0);
+		out
+	}
+
+	pub fn terminator() -> Vec<u8> {
+		synonym(0, 0, u32::MAX, "", &[])
+	}
+}
