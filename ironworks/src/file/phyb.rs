@@ -687,7 +687,10 @@ fn trailer<R: Read + Seek>(reader: &mut R, endian: Endian, _: ()) -> BinResult<O
 
 #[cfg(test)]
 mod test {
-	use std::io::{self, Cursor};
+	use std::{
+		f32::consts::FRAC_PI_4,
+		io::{self, Cursor},
+	};
 
 	use crate::{error::Error, file::File};
 
@@ -768,7 +771,7 @@ mod test {
 
 	fn node(bone: &[u8], radius: f32, collision_flags: u32) -> Vec<u8> {
 		let mut bytes = name(bone);
-		bytes.extend(floats(&[radius, 0.25, 0.5, 1.0, 0.7854]));
+		bytes.extend(floats(&[radius, 0.25, 0.5, 1.0, FRAC_PI_4]));
 		bytes.extend(floats(&[0.0, 1.0, 0.0, 1.0, 0.0, 0.0]));
 		bytes.extend(collision_flags.to_le_bytes());
 		bytes.extend(0u32.to_le_bytes());
@@ -1097,7 +1100,7 @@ mod test {
 		assert_eq!(chain.nodes().len(), 2);
 		assert_eq!(chain.nodes()[1].bone().as_str(), Some("j_kami_b"));
 		assert_eq!(chain.nodes()[1].radius(), 0.04);
-		assert_eq!(chain.nodes()[1].cone_max_angle(), 0.7854);
+		assert_eq!(chain.nodes()[1].cone_max_angle(), FRAC_PI_4);
 		assert_eq!(chain.nodes()[1].collision_flags(), 6);
 		assert_eq!(simulator.chains()[1].chain_type(), ChainType::Sphere);
 		assert_eq!(

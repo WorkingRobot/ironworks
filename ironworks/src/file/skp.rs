@@ -306,7 +306,10 @@ impl fmt::Debug for Name {
 
 #[cfg(test)]
 mod test {
-	use std::io::{self, Cursor};
+	use std::{
+		f32::consts::FRAC_PI_6,
+		io::{self, Cursor},
+	};
 
 	use crate::{error::Error, file::File};
 
@@ -523,7 +526,7 @@ mod test {
 			0x12,
 			&[],
 			&sections,
-			&slope([0.5236, 0.0], &points),
+			&slope([FRAC_PI_6, 0.0], &points),
 		)))
 		.unwrap();
 
@@ -531,7 +534,7 @@ mod test {
 
 		let slope = file.slope().unwrap();
 		assert_eq!(slope.unknown_a(), 80);
-		assert_eq!(slope.angles(), [0.5236, 0.0]);
+		assert_eq!(slope.angles(), [FRAC_PI_6, 0.0]);
 		assert_eq!(slope.points()[1], points[1]);
 	}
 
