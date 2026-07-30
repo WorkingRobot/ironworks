@@ -2,10 +2,18 @@
 //!
 //! Each file type may contain a number of related supporting items, and as such are namespaced seperately.
 
+#[cfg(any(feature = "eqp", feature = "gmp"))]
+mod block_table;
 mod file;
 
 #[cfg(feature = "eqdp")]
 pub mod eqdp;
+#[cfg(feature = "eqp")]
+pub mod eqp;
+#[cfg(feature = "est")]
+pub mod est;
+#[cfg(feature = "evp")]
+pub mod evp;
 #[cfg(feature = "exd")]
 pub mod exd;
 #[cfg(feature = "exh")]
@@ -16,6 +24,10 @@ pub mod exl;
 pub mod fdt;
 #[cfg(feature = "gfd")]
 pub mod gfd;
+#[cfg(feature = "gmp")]
+pub mod gmp;
+#[cfg(feature = "imc")]
+pub mod imc;
 #[cfg(feature = "mdl")]
 pub mod mdl;
 #[cfg(feature = "mtrl")]
