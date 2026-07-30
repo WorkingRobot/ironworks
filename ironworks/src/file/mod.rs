@@ -42,6 +42,8 @@ pub mod mtrl;
 pub mod patch;
 #[cfg(feature = "pbd")]
 pub mod pbd;
+#[cfg(feature = "pcb")]
+pub mod pcb;
 #[cfg(feature = "scd")]
 pub mod scd;
 #[cfg(feature = "shpk")]
