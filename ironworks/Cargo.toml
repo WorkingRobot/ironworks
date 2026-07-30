@@ -46,6 +46,7 @@ pbd = []
 scd = []
 shpk = []
 sklb = []
+stm = ["dep:half"]
 tex = ["dep:num_enum"]
 uld = []
 

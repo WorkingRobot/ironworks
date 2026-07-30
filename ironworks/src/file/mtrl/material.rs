@@ -298,6 +298,52 @@ pub struct ColorRow {
 	pub tile_transform: [f32; 4],
 }
 
+/// A field of a colour table row a dye can drive. Bit positions follow Penumbra.GameData's
+/// `ColorDyeTableRow`, and the order is the one staining templates hold their columns in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DyeField {
+	Diffuse,
+	Specular,
+	Emissive,
+	Scalar3,
+	Metalness,
+	Roughness,
+	SheenRate,
+	SheenTint,
+	SheenAperture,
+	Anisotropy,
+	SphereIndex,
+	SphereMask,
+}
+
+/// One row of a dye table: the staining template the matching colour table row takes dyed values
+/// from, and which of its fields it takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DyeRow {
+	template: u16,
+	channel: u8,
+	fields: u16,
+}
+
+impl DyeRow {
+	/// Template the dyed values come from, which also says which of the two staining template files
+	/// holds it. Zero where the row is not dyed at all.
+	pub fn template(&self) -> u16 {
+		self.template
+	}
+
+	/// Which of the item's stains the row reads, for the two an item can carry. Always zero on a
+	/// legacy table, which predates the second.
+	pub fn channel(&self) -> u8 {
+		self.channel
+	}
+
+	/// Whether the template drives this field. The colour table's own value stands where it does not.
+	pub fn dyes(&self, field: DyeField) -> bool {
+		self.fields & (1 << field as u16) != 0
+	}
+}
+
 /// IEEE 754 binary16 to binary32.
 fn half_to_f32(bits: u16) -> f32 {
 	let sign = u32::from(bits & 0x8000) << 16;
@@ -370,8 +416,34 @@ impl ColorTable {
 	}
 
 	/// The dye table trailing the colour table, empty when the material has none.
+	/// [`dye_row`](Self::dye_row) reads one row of it.
 	pub fn dye(&self) -> &[u16] {
 		&self.dye
+	}
+
+	/// One row of the dye table, or `None` where the material carries none for that row. A legacy
+	/// row is a `u16` naming five fields; an extended one is a `u32` naming twelve.
+	pub fn dye_row(&self, index: usize) -> Option<DyeRow> {
+		match self.kind {
+			ColorTableKind::Legacy => {
+				let bits = *self.dye.get(index)?;
+				Some(DyeRow {
+					template: bits >> 5,
+					channel: 0,
+					fields: bits & 0x1F,
+				})
+			}
+			ColorTableKind::Extended => {
+				let halves = self.dye.get(index * 2..index * 2 + 2)?;
+				let bits = u32::from(halves[0]) | (u32::from(halves[1]) << 16);
+				Some(DyeRow {
+					template: ((bits >> 16) & 0x7FF) as u16,
+					channel: ((bits >> 27) & 0x3) as u8,
+					fields: (bits & 0xFFF) as u16,
+				})
+			}
+			ColorTableKind::Unknown => None,
+		}
 	}
 
 	/// Which layout this table uses.
@@ -428,5 +500,83 @@ impl ColorTable {
 			ColorTableKind::Extended => Some(Self::EXTENDED_ROW),
 			ColorTableKind::Unknown => None,
 		}
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use std::io::Cursor;
+
+	use crate::file::File;
+
+	use super::{ColorTableKind, DyeField, Material};
+
+	/// A material carrying nothing but a colour table of the stated dimensions and a dye table.
+	fn material(logs: u32, table: &[u16]) -> Vec<u8> {
+		let mut bytes = Vec::new();
+		bytes.extend(0x0103_0000u32.to_le_bytes());
+		bytes.extend(0u16.to_le_bytes());
+		bytes.extend(u16::try_from(table.len() * 2).unwrap().to_le_bytes());
+		bytes.extend(1u16.to_le_bytes());
+		bytes.extend(0u16.to_le_bytes());
+		// No textures, UV sets or colour sets, and four bytes of trailing header.
+		bytes.extend([0, 0, 0, 4]);
+		// The shader name, which is only its terminator.
+		bytes.push(0);
+		bytes.extend((0xC | (logs << 4)).to_le_bytes());
+		bytes.extend(table.iter().flat_map(|half| half.to_le_bytes()));
+		// Material header, declaring no keys, constants, samplers or values.
+		bytes.extend([0; 12]);
+		bytes
+	}
+
+	#[test]
+	fn splits_an_extended_dye_row() {
+		let row = |template: u32, channel: u32, fields: u32| {
+			let bits = fields | (template << 16) | (channel << 27);
+			[bits as u16, (bits >> 16) as u16]
+		};
+		let mut table = vec![0u16; 32 * 32];
+		table.extend([row(0x2AB, 1, 0x801), row(0, 0, 0)].concat());
+
+		let file = Material::read(Cursor::new(material(0x53, &table))).unwrap();
+		let table = file.color_table().unwrap();
+		assert_eq!(table.kind(), ColorTableKind::Extended);
+
+		let dye = table.dye_row(0).unwrap();
+		assert_eq!(dye.template(), 0x2AB);
+		assert_eq!(dye.channel(), 1);
+		assert!(dye.dyes(DyeField::Diffuse));
+		assert!(dye.dyes(DyeField::SphereMask));
+		assert!(!dye.dyes(DyeField::Specular));
+		assert_eq!(table.dye_row(1).unwrap().template(), 0);
+		assert!(table.dye_row(2).is_none());
+	}
+
+	/// A legacy row is half the width, names five fields, and has no channel.
+	#[test]
+	fn splits_a_legacy_dye_row() {
+		let mut table = vec![0u16; 16 * 16];
+		table.push((200 << 5) | 0x11);
+
+		let file = Material::read(Cursor::new(material(0x00, &table))).unwrap();
+		let table = file.color_table().unwrap();
+		assert_eq!(table.kind(), ColorTableKind::Legacy);
+
+		let dye = table.dye_row(0).unwrap();
+		assert_eq!(dye.template(), 200);
+		assert_eq!(dye.channel(), 0);
+		assert!(dye.dyes(DyeField::Diffuse));
+		assert!(dye.dyes(DyeField::Metalness));
+		assert!(!dye.dyes(DyeField::Roughness));
+		assert!(table.dye_row(1).is_none());
+	}
+
+	#[test]
+	fn reads_no_row_from_a_table_it_cannot_shape() {
+		let file = Material::read(Cursor::new(material(0x02, &[0; 8]))).unwrap();
+		let table = file.color_table().unwrap();
+		assert_eq!(table.kind(), ColorTableKind::Unknown);
+		assert!(table.dye_row(0).is_none());
 	}
 }

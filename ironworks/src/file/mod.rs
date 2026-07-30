@@ -42,6 +42,8 @@ pub mod scd;
 pub mod shpk;
 #[cfg(feature = "sklb")]
 pub mod sklb;
+#[cfg(feature = "stm")]
+pub mod stm;
 #[cfg(feature = "tex")]
 pub mod tex;
 #[cfg(feature = "uld")]
