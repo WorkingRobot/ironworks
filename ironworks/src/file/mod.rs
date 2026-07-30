@@ -2,6 +2,8 @@
 //!
 //! Each file type may contain a number of related supporting items, and as such are namespaced seperately.
 
+#[cfg(any(feature = "sklb", feature = "skp"))]
+mod animation;
 #[cfg(any(feature = "eqp", feature = "gmp"))]
 mod block_table;
 mod file;
@@ -50,6 +52,8 @@ pub mod scd;
 pub mod shpk;
 #[cfg(feature = "sklb")]
 pub mod sklb;
+#[cfg(feature = "skp")]
+pub mod skp;
 #[cfg(feature = "stm")]
 pub mod stm;
 #[cfg(feature = "tera")]

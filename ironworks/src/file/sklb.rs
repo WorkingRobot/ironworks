@@ -2,13 +2,15 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use binrw::helpers::{count, until_eof};
+use binrw::helpers::until_eof;
 use binrw::{BinRead, BinResult, Endian, binread};
 use getset::{CopyGetters, Getters};
 
 use crate::{FileStream, error::Result};
 
-use super::file::File;
+use super::{animation, file::File};
+
+pub use animation::AnimationLayer;
 
 /// Skeleton data and related mappings.
 #[binread]
@@ -25,21 +27,11 @@ pub struct SkeletonBinary {
 	header: Header,
 
 	// Animation Layers.
+	///
 	#[br(
 		seek_before = SeekFrom::Start(header.layer_offset().into()),
-		temp,
-		assert(&alph_magic == b"hpla")
+		parse_with = animation::layers,
 	)]
-	alph_magic: [u8; 4],
-
-	#[br(temp)]
-	layer_count: u16,
-
-	///
-	#[br(args {
-		count: layer_count.into(),
-		inner: (header.layer_offset().into(),)
-	})]
 	#[get = "pub"]
 	animation_layers: Vec<AnimationLayer>,
 
@@ -172,44 +164,4 @@ struct HeaderV2 {
 	#[br(pad_before = 2)]
 	character_id: u32,
 	mapper_character_id: [u32; 4],
-}
-
-///
-#[derive(Debug, Getters, CopyGetters)]
-pub struct AnimationLayer {
-	///
-	#[get_copy = "pub"]
-	layer: u32,
-
-	///
-	#[get = "pub"]
-	bone_indices: Vec<i16>,
-}
-
-impl BinRead for AnimationLayer {
-	type Args<'a> = (u64,);
-
-	fn read_options<R: Read + Seek>(
-		reader: &mut R,
-		options: Endian,
-		(base_offset,): Self::Args<'_>,
-	) -> BinResult<Self> {
-		let offset = u16::read_le(reader)?;
-		let position = reader.stream_position()?;
-
-		reader.seek(SeekFrom::Start(base_offset + u64::from(offset)))?;
-
-		let layer = u32::read_le(reader)?;
-		let bone_count = u16::read_le(reader)?;
-		let bone_indices = count(bone_count.into())(reader, options, ())?;
-
-		let result = Self {
-			layer,
-			bone_indices,
-		};
-
-		reader.seek(SeekFrom::Start(position))?;
-
-		Ok(result)
-	}
 }
