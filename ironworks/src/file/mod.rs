@@ -6,8 +6,12 @@
 mod block_table;
 mod file;
 
+#[cfg(feature = "atch")]
+pub mod atch;
 #[cfg(feature = "cmp")]
 pub mod cmp;
+#[cfg(feature = "eid")]
+pub mod eid;
 #[cfg(feature = "eqdp")]
 pub mod eqdp;
 #[cfg(feature = "eqp")]

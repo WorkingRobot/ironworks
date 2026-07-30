@@ -28,7 +28,9 @@ sqpack = ["dep:crc32fast", "dep:flate2"]
 zipatch = ["patch", "sqpack"]
 
 # File types
+atch = []
 cmp = []
+eid = []
 eqdp = ["dep:modular-bitfield"]
 eqp = ["dep:modular-bitfield"]
 est = []
