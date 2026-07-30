@@ -40,6 +40,8 @@ pub mod imc;
 pub mod mdl;
 #[cfg(feature = "mtrl")]
 pub mod mtrl;
+#[cfg(feature = "pap")]
+pub mod pap;
 #[cfg(feature = "patch")]
 pub mod patch;
 #[cfg(feature = "pbd")]
