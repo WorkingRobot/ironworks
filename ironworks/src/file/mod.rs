@@ -48,6 +48,8 @@ pub mod patch;
 pub mod pbd;
 #[cfg(feature = "pcb")]
 pub mod pcb;
+#[cfg(feature = "phyb")]
+pub mod phyb;
 #[cfg(feature = "scd")]
 pub mod scd;
 #[cfg(feature = "shpk")]
