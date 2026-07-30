@@ -10,6 +10,12 @@ use crate::{
 
 use super::{index1::Index1, index2::Index2, shared::FileMetadata};
 
+/// How many absent chunk IDs to look past before treating a category as exhausted.
+/// Live data leaves holes - global/latest ships `ex2/bg` as chunks 0-3 and 5, and `ex5/bg`
+/// as 0-3 and 5-8 - and a resource may be remote, so this walks over holes without
+/// probing the whole ID space.
+const CHUNK_MISS_TOLERANCE: u16 = 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum IndexHash {
 	/// `.index`
@@ -62,7 +68,7 @@ pub struct Index<R> {
 
 	resource: Arc<R>,
 	max_chunk: Mutex<Option<u16>>,
-	chunks: Mutex<Vec<Arc<IndexChunk>>>,
+	chunks: Mutex<Vec<Option<Arc<IndexChunk>>>>,
 }
 
 impl<R: Resource> Index<R> {
@@ -156,49 +162,69 @@ impl<R: Resource> Index<R> {
 		let max_chunk = guard.unwrap_or(256);
 		drop(guard);
 
-		(0u16..max_chunk).map_while(|index| {
-			let index_usize = usize::from(index);
-			let index_u8 = u8::try_from(index).unwrap();
+		(0u16..max_chunk)
+			.scan(0u16, |misses, index| {
+				let index_usize = usize::from(index);
+				let index_u8 = u8::try_from(index).unwrap();
 
-			// If we've already loaded this chunk index, use that.
-			let guard = self.chunks.lock().unwrap();
-			if let Some(chunk) = guard.get(index_usize) {
-				return Some(Ok((index_u8, chunk.clone())));
-			}
-			drop(guard);
+				// If we've already decided about this chunk index, use that.
+				let guard = self.chunks.lock().unwrap();
+				if let Some(chunk) = guard.get(index_usize) {
+					return Some(chunk.clone().map(|chunk| Ok((index_u8, chunk))));
+				}
+				drop(guard);
 
-			// Try to build a new chunk.
-			let chunk = IndexChunk::new(
-				self.repository,
-				self.category,
-				index.try_into().unwrap(),
-				&*self.resource,
-			);
+				// Try to build a new chunk.
+				let chunk = IndexChunk::new(
+					self.repository,
+					self.category,
+					index.try_into().unwrap(),
+					&*self.resource,
+				);
 
-			match chunk {
-				// Found an index - save it out to the cache.
-				Ok(chunk) => {
-					let mut guard = self.chunks.lock().unwrap();
-					// The lock was released while reading, so another lookup may have stored this
-					// chunk already.
-					if guard.len() == index_usize {
-						guard.push(chunk.into());
+				match chunk {
+					// Found an index - save it out to the cache.
+					Ok(chunk) => {
+						*misses = 0;
+						let mut guard = self.chunks.lock().unwrap();
+						// The lock was released while reading, so another lookup may have stored this
+						// chunk already.
+						if guard.len() == index_usize {
+							guard.push(Some(chunk.into()));
+						}
+						Some(
+							guard
+								.get(index_usize)
+								.and_then(|chunk| chunk.clone())
+								.map(|chunk| Ok((index_u8, chunk))),
+						)
 					}
-					guard
-						.get(index_usize)
-						.map(|chunk| Ok((index_u8, chunk.clone())))
-				}
 
-				// No index was found for this chunk - mark index as the max chunk point so we don't do that again.
-				Err(Error::NotFound(_)) => {
-					*self.max_chunk.lock().unwrap() = Some(index);
-					None
-				}
+					// No index at this ID. Chunk IDs are not contiguous in live data, so keep
+					// looking; only a run of misses means we have run off the end.
+					Err(Error::NotFound(_)) => {
+						*misses += 1;
+						let mut guard = self.chunks.lock().unwrap();
+						if guard.len() == index_usize {
+							guard.push(None);
+						}
+						drop(guard);
 
-				// Some other error occured, surface it.
-				Err(error) => Some(Err(error)),
-			}
-		})
+						match *misses >= CHUNK_MISS_TOLERANCE {
+							// Remember where the last real chunk was so we stop here next time.
+							true => {
+								*self.max_chunk.lock().unwrap() = Some(index + 1 - *misses);
+								None
+							}
+							false => Some(None),
+						}
+					}
+
+					// Some other error occured, surface it.
+					Err(error) => Some(Some(Err(error))),
+				}
+			})
+			.flatten()
 	}
 }
 
