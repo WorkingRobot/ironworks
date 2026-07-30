@@ -6,6 +6,8 @@
 mod block_table;
 mod file;
 
+#[cfg(feature = "cmp")]
+pub mod cmp;
 #[cfg(feature = "eqdp")]
 pub mod eqdp;
 #[cfg(feature = "eqp")]
@@ -44,6 +46,8 @@ pub mod shpk;
 pub mod sklb;
 #[cfg(feature = "stm")]
 pub mod stm;
+#[cfg(feature = "tera")]
+pub mod tera;
 #[cfg(feature = "tex")]
 pub mod tex;
 #[cfg(feature = "uld")]

@@ -28,6 +28,7 @@ sqpack = ["dep:crc32fast", "dep:flate2"]
 zipatch = ["patch", "sqpack"]
 
 # File types
+cmp = []
 eqdp = ["dep:modular-bitfield"]
 eqp = ["dep:modular-bitfield"]
 est = []
@@ -47,6 +48,7 @@ scd = []
 shpk = []
 sklb = []
 stm = ["dep:half"]
+tera = []
 tex = ["dep:num_enum"]
 uld = []
 
