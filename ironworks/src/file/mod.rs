@@ -32,6 +32,8 @@ pub mod exl;
 pub mod fdt;
 #[cfg(feature = "gfd")]
 pub mod gfd;
+#[cfg(feature = "ggd")]
+pub mod ggd;
 #[cfg(feature = "gmp")]
 pub mod gmp;
 #[cfg(feature = "imc")]
