@@ -66,6 +66,8 @@ pub mod stm;
 pub mod tera;
 #[cfg(feature = "tex")]
 pub mod tex;
+#[cfg(feature = "tmb")]
+pub mod tmb;
 #[cfg(feature = "uld")]
 pub mod uld;
 
