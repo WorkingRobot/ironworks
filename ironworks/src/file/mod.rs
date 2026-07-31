@@ -7,6 +7,8 @@ mod animation;
 #[cfg(any(feature = "eqp", feature = "gmp"))]
 mod block_table;
 mod file;
+#[cfg(feature = "lgb")]
+pub mod layer;
 #[cfg(any(feature = "shcd", feature = "shpk"))]
 mod shader;
 
@@ -40,6 +42,8 @@ pub mod ggd;
 pub mod gmp;
 #[cfg(feature = "imc")]
 pub mod imc;
+#[cfg(feature = "lgb")]
+pub mod lgb;
 #[cfg(feature = "mdl")]
 pub mod mdl;
 #[cfg(feature = "mtrl")]
