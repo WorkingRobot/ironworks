@@ -96,7 +96,9 @@ impl Entry {
 	}
 }
 
-#[allow(dead_code)]
+// `#[bitfield]` parenthesises each field's type where `#[derive(BinRead)]` then reads it back, so
+// the lint fires on generated spans and points at the visibility keyword.
+#[allow(dead_code, unused_parens)]
 mod bitfield {
 	use binrw::BinRead;
 	use modular_bitfield::prelude::*;
