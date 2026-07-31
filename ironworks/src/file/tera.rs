@@ -32,12 +32,12 @@ pub struct Terrain {
 	/// How far a plate's textures blend into its neighbours, over `0.0..=1.0`.
 	edge_bias: f32,
 
-	/// Per texture slot, whether the plate materials sample it with the alternate mip LOD bias.
-	/// Ordered colour, normal, specular.
+	/// Mask of the texture slots the plate materials sample with the alternate mip LOD bias, the
+	/// colour slot in the lowest bit, then normal and specular. No other bit is ever set.
 	///
 	/// Both Physis and Lumina read this offset as padding, but it carries a value.
-	#[br(map = |raw: u32| [0, 1, 2].map(|bit| raw & (1 << bit) != 0), pad_after = 28)]
-	sampler_bias: [bool; 3],
+	#[br(pad_after = 28)]
+	sampler_bias: u32,
 
 	#[br(count = plate_count)]
 	#[getset(skip)]
@@ -143,11 +143,11 @@ mod test {
 		assert_eq!(file.plate_position(plates[3]), (64.0, 64.0));
 	}
 
-	/// The four bytes at 0x14 carry a value, and reading them as padding would shift every plate.
+	/// The four bytes at 0x14 carry a value rather than the padding both other readers take them for.
 	#[test]
 	fn sampler_bias_is_read_rather_than_skipped() {
 		let file = Terrain::read(Cursor::new(terrain(32, 5, &[(2, 3)]))).unwrap();
-		assert_eq!(file.sampler_bias(), [true, false, true]);
+		assert_eq!(file.sampler_bias(), 5);
 		assert_eq!(file.edge_bias(), 1.0);
 		assert_eq!(file.plates()[0].x(), 2);
 		assert_eq!(file.plate_position(file.plates()[0]), (80.0, 112.0));
