@@ -16,7 +16,8 @@ use super::File;
 #[derive(Debug, CopyGetters)]
 #[get_copy = "pub"]
 pub struct Terrain {
-	/// `0x01000003` in every file the game ships.
+	/// `0x01000003` in every file the game ships. Earlier versions lay the header out differently,
+	/// putting the plate size after the plates or leaving it out entirely.
 	version: u32,
 
 	#[br(temp)]
@@ -28,11 +29,15 @@ pub struct Terrain {
 	/// Distance past which the terrain is not drawn, which is zero in most files.
 	clip_distance: f32,
 
-	unknown_a: f32,
+	/// How far a plate's textures blend into its neighbours, over `0.0..=1.0`.
+	edge_bias: f32,
 
+	/// Per texture slot, whether the plate materials sample it with the alternate mip LOD bias.
+	/// Ordered colour, normal, specular.
+	///
 	/// Both Physis and Lumina read this offset as padding, but it carries a value.
-	#[br(pad_after = 28)]
-	unknown_b: u32,
+	#[br(map = |raw: u32| [0, 1, 2].map(|bit| raw & (1 << bit) != 0), pad_after = 28)]
+	sampler_bias: [bool; 3],
 
 	#[br(count = plate_count)]
 	#[getset(skip)]
@@ -85,14 +90,14 @@ mod test {
 
 	use super::Terrain;
 
-	fn terrain(plate_size: u32, unknown_b: u32, plates: &[(i16, i16)]) -> Vec<u8> {
+	fn terrain(plate_size: u32, sampler_bias: u32, plates: &[(i16, i16)]) -> Vec<u8> {
 		let mut bytes = Vec::new();
 		bytes.extend(0x01000003u32.to_le_bytes());
 		bytes.extend(u32::try_from(plates.len()).unwrap().to_le_bytes());
 		bytes.extend(plate_size.to_le_bytes());
 		bytes.extend(0.0f32.to_le_bytes());
 		bytes.extend(1.0f32.to_le_bytes());
-		bytes.extend(unknown_b.to_le_bytes());
+		bytes.extend(sampler_bias.to_le_bytes());
 		bytes.extend([0; 28]);
 		for &(x, y) in plates {
 			bytes.extend(x.to_le_bytes());
@@ -140,9 +145,10 @@ mod test {
 
 	/// The four bytes at 0x14 carry a value, and reading them as padding would shift every plate.
 	#[test]
-	fn unknown_b_is_read_rather_than_skipped() {
-		let file = Terrain::read(Cursor::new(terrain(32, 7, &[(2, 3)]))).unwrap();
-		assert_eq!(file.unknown_b(), 7);
+	fn sampler_bias_is_read_rather_than_skipped() {
+		let file = Terrain::read(Cursor::new(terrain(32, 5, &[(2, 3)]))).unwrap();
+		assert_eq!(file.sampler_bias(), [true, false, true]);
+		assert_eq!(file.edge_bias(), 1.0);
 		assert_eq!(file.plates()[0].x(), 2);
 		assert_eq!(file.plate_position(file.plates()[0]), (80.0, 112.0));
 	}
