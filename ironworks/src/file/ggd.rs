@@ -19,9 +19,9 @@ fn half(bits: u16) -> f32 {
 
 /// Where the grass of one terrain plate grows, at one level of detail.
 ///
-/// A plate ships three of these beside its models, as `<plate>_h`, `_m` and `_l` in the zone's
-/// `grass` directory. The grid divides the plate into chunks, each holding the placements that
-/// fall inside it.
+/// The zone's `grass_zone_data.gzd` names every one of these, as `<x>_<y>_<z>_h`, `_m` or `_l` in
+/// the zone's `grass` directory, for the cell it covers and the level of detail it holds. The grid
+/// divides that cell into chunks, each holding the placements that fall inside it.
 #[binread]
 #[br(little, magic = b" dgg")]
 #[derive(Debug, CopyGetters)]
@@ -135,7 +135,7 @@ pub struct Chunk {
 
 impl Chunk {
 	/// Count slots a chunk carries. The leading [`AUTO_LAYERS`](Self::AUTO_LAYERS) are procedural
-	/// grass layers, the rest name placed models, and the last is unused.
+	/// grass layers, the rest name the models the zone's `.gzd` lists, and the last is unused.
 	pub const COUNTS: usize = 36;
 
 	/// Leading count slots that hold procedural grass rather than models.
