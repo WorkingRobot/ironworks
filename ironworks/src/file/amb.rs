@@ -64,7 +64,7 @@ pub struct EnvLocation {
 	#[br(temp, assert(kind == [0, 0]))]
 	kind: [u8; 2],
 
-	/// Nine more coefficients, in the shape one channel of a [`Harmonics`] takes.
+	/// Nine values, none of them identified.
 	#[get_copy = "pub"]
 	unknown: [f32; 9],
 
@@ -154,7 +154,7 @@ pub struct Sky {
 pub struct Keyframe {
 	light: Harmonics,
 
-	/// Seconds since midnight, on the hour.
+	/// Seconds since midnight.
 	time: f32,
 }
 
