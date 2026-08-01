@@ -10,6 +10,9 @@ use modular_bitfield::bitfield;
 
 const MAX_LODS: usize = 3;
 
+/// The version before bone tables moved their indices into a shared array.
+const VERSION_5: u32 = 0x0100_0005;
+
 // TODO: this is currently inlining a bunch of structures - look into if it's worth pulling it apart at all.
 #[binread]
 #[br(little)]
@@ -94,7 +97,8 @@ pub struct File {
 	bg_change_material_index: u8,
 	bg_crest_change_material_index: u8,
 	unknown6: u8,
-	unknown7: u16,
+	#[br(temp)]
+	bone_table_array_count_total: u16,
 	unknown8: u16,
 	#[br(pad_after = 6)]
 	unknown9: u16,
@@ -128,8 +132,11 @@ pub struct File {
 	#[br(count = bone_count)]
 	bone_name_offsets: Vec<u32>,
 
-	#[br(count = bone_table_count)]
+	#[br(count = bone_table_count, args { inner: (version,) })]
 	bone_tables: Vec<BoneTable>,
+
+	#[br(count = bone_table_array_count_total)]
+	bone_table_indices: Vec<u16>,
 
 	#[br(count = shape_count)]
 	shapes: Vec<Shape>,
@@ -393,13 +400,20 @@ struct TerrainShadowSubmesh {
 }
 
 #[binread]
-#[br(little)]
+#[br(little, import(version: u32))]
 #[derive(Debug)]
-struct BoneTable {
-	bone_index: [u16; 64],
-	#[br(pad_after = 3)]
-	bone_count: u8,
-	// padding: [u8; 3],
+enum BoneTable {
+	#[br(pre_assert(version == VERSION_5))]
+	Inline {
+		bone_index: [u16; 64],
+		#[br(pad_after = 3)]
+		bone_count: u8,
+		// padding: [u8; 3],
+	},
+
+	/// A span of [`File::bone_table_indices`], offset in 4 byte units from this entry's own
+	/// position.
+	Span { offset: u16, size: u16 },
 }
 
 #[binread]
@@ -434,4 +448,185 @@ struct ShapeValue {
 struct BoundingBox {
 	min: [f32; 4],
 	max: [f32; 4],
+}
+#[cfg(test)]
+mod test {
+	use std::io::Cursor;
+
+	use binrw::BinRead;
+
+	use super::{File, VERSION_5};
+
+	/// A minimal model. The vertex offset it declares is the length of everything laid out
+	/// before the vertex buffer, so reading it back checks the reader consumes exactly what
+	/// was written.
+	#[derive(Default)]
+	struct Model {
+		version: u32,
+		flags2: u8,
+		/// Bone index counts, one per table.
+		bone_tables: Vec<u16>,
+	}
+
+	impl Model {
+		fn bytes(&self) -> Vec<u8> {
+			let bone_count = 2u16;
+			// Only the shared array is counted, and the older layout has none.
+			let table_indices = match self.version {
+				VERSION_5 => 0,
+				_ => self
+					.bone_tables
+					.iter()
+					.map(|count| count.next_multiple_of(2))
+					.sum::<u16>(),
+			};
+
+			let mut body = Vec::new();
+			// One vertex declaration, every element past the stream sentinel unused.
+			body.extend([255u8, 0, 0, 0, 0, 0, 0, 0].repeat(17));
+			// String section, holding one terminator.
+			body.extend(1u16.to_le_bytes());
+			body.extend([0; 2]);
+			body.extend(1u32.to_le_bytes());
+			body.push(0);
+
+			// Model header.
+			body.extend(1.0f32.to_le_bytes());
+			for count in [
+				0u16,
+				0,
+				0,
+				0,
+				bone_count,
+				self.bone_tables.len() as u16,
+				0,
+				0,
+				0,
+			] {
+				body.extend(count.to_le_bytes());
+			}
+			body.extend([1, 0]);
+			body.extend(0u16.to_le_bytes());
+			body.extend([0, self.flags2]);
+			body.extend(0.0f32.to_le_bytes());
+			body.extend(0.0f32.to_le_bytes());
+			body.extend([0; 4]);
+			body.extend([0; 4]);
+			body.extend(table_indices.to_le_bytes());
+			body.extend(0u16.to_le_bytes());
+			body.extend(0u16.to_le_bytes());
+			body.extend([0; 6]);
+
+			body.extend([0; 3 * 60]);
+			if self.flags2 & 0x10 != 0 {
+				body.extend([0; 3 * 40]);
+			}
+			// Bone name offsets.
+			body.extend([0; 8]);
+
+			if self.version == VERSION_5 {
+				for count in &self.bone_tables {
+					body.extend([0; 128]);
+					body.extend([*count as u8, 0, 0, 0]);
+				}
+			} else {
+				let mut offset = self.bone_tables.len() as u16;
+				for (index, count) in self.bone_tables.iter().enumerate() {
+					// Offsets run in 4 byte units from the entry's own position.
+					body.extend((offset - index as u16).to_le_bytes());
+					body.extend(count.to_le_bytes());
+					offset += count.next_multiple_of(2) / 2;
+				}
+				body.extend(vec![0; usize::from(table_indices) * 2]);
+			}
+
+			// Submesh bone map, empty.
+			body.extend(0u32.to_le_bytes());
+			// Padding, which the reader takes from the byte before it.
+			body.push(4);
+			body.extend([0; 4]);
+			body.extend(vec![0; (4 + usize::from(bone_count)) * 32]);
+
+			let mut bytes = Vec::new();
+			bytes.extend(self.version.to_le_bytes());
+			bytes.extend(136u32.to_le_bytes());
+			bytes.extend((body.len() as u32 - 136).to_le_bytes());
+			bytes.extend(1u16.to_le_bytes());
+			bytes.extend(0u16.to_le_bytes());
+			let vertex_offset = 0x44 + body.len() as u32;
+			bytes.extend(vertex_offset.to_le_bytes());
+			bytes.extend([0; 8 + 12 + 12 + 12]);
+			bytes.extend([1, 0, 0, 0]);
+			bytes.extend(body);
+			// A byte of vertex buffer, so the reader has something to stop at.
+			bytes.push(0);
+			bytes
+		}
+
+		fn read(&self) -> File {
+			File::read(&mut Cursor::new(self.bytes())).unwrap()
+		}
+	}
+
+	/// Every section ends where the vertex buffer begins.
+	fn ends_at_the_vertex_buffer(model: &Model) {
+		let file = model.read();
+		assert_eq!(file.data_offset, u64::from(file.vertex_offset[0]));
+	}
+
+	#[test]
+	fn reads_bone_tables_as_spans_of_a_shared_array() {
+		let model = Model {
+			version: 0x0100_0006,
+			bone_tables: vec![3, 8, 1],
+			..Default::default()
+		};
+		ends_at_the_vertex_buffer(&model);
+
+		let file = model.read();
+		// Index arrays pad up to an even count, so the total exceeds the sum of the sizes.
+		assert_eq!(file.bone_table_indices.len(), 14);
+		assert!(matches!(
+			file.bone_tables[1],
+			super::BoneTable::Span { offset: 4, size: 8 }
+		));
+	}
+
+	/// The version before it holds a fixed 132 byte table each, with no shared array.
+	#[test]
+	fn reads_bone_tables_inline() {
+		let model = Model {
+			version: VERSION_5,
+			bone_tables: vec![3, 8, 1],
+			..Default::default()
+		};
+		let file = model.read();
+		assert!(file.bone_table_indices.is_empty());
+		assert!(matches!(
+			file.bone_tables[2],
+			super::BoneTable::Inline { bone_count: 1, .. }
+		));
+	}
+
+	#[test]
+	fn gates_extra_lods_on_the_fifth_bit() {
+		for flags2 in [0x10, 0x1F, 0xF0] {
+			let model = Model {
+				version: 0x0100_0006,
+				flags2,
+				..Default::default()
+			};
+			ends_at_the_vertex_buffer(&model);
+			assert!(model.read().extra_lods.is_some());
+		}
+		for flags2 in [0x08, 0x0F, 0xEF] {
+			let model = Model {
+				version: 0x0100_0006,
+				flags2,
+				..Default::default()
+			};
+			ends_at_the_vertex_buffer(&model);
+			assert!(model.read().extra_lods.is_none());
+		}
+	}
 }
