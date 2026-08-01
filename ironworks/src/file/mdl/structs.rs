@@ -205,8 +205,9 @@ pub struct VertexElement {
 	pub offset: u8,
 	pub format: VertexFormat,
 	pub attribute: VertexAttributeKind,
+	/// Distinguishes elements sharing an attribute kind, such as a mesh's second UV set.
 	#[br(pad_after = 3)]
-	usage_index: u8,
+	pub usage_index: u8,
 }
 
 #[binread]
