@@ -63,9 +63,10 @@ impl SkeletonBinary {
 
 	///
 	pub fn connect_bones(&self) -> Vec<i16> {
-		match &self.header {
-			Header::V1(header) => header.connect_bones.to_vec(),
-			Header::V2(header) => vec![header.connect_bone_index],
+		match (&self.header, self.version) {
+			(Header::V1(header), _) => header.connect_bones.to_vec(),
+			(Header::V2(header), Version::V1301) => header.connect_bones.to_vec(),
+			(Header::V2(header), _) => vec![header.connect_bone_index],
 		}
 	}
 
@@ -101,6 +102,9 @@ pub enum Version {
 
 	#[br(magic = b"0031")]
 	V1300,
+
+	#[br(magic = b"1031")]
+	V1301,
 }
 
 #[derive(Debug)]
@@ -137,7 +141,7 @@ impl BinRead for Header {
 			Version::V1100 | Version::V1110 | Version::V1200 => {
 				Ok(Self::V1(HeaderV1::read(reader)?))
 			}
-			Version::V1300 => Ok(Self::V2(HeaderV2::read(reader)?)),
+			Version::V1300 | Version::V1301 => Ok(Self::V2(HeaderV2::read(reader)?)),
 		}
 	}
 }
@@ -164,4 +168,49 @@ struct HeaderV2 {
 	#[br(pad_before = 2)]
 	character_id: u32,
 	mapper_character_id: [u32; 4],
+	connect_bones: [i16; 4],
+}
+
+#[cfg(test)]
+mod test {
+	use std::io::Cursor;
+
+	use crate::file::File;
+
+	use super::SkeletonBinary;
+
+	/// A new-style skeleton of the given version, carrying no animation layers and a one-byte
+	/// skeleton block.
+	fn skeleton(version: &[u8; 4], connect_bone_index: i16, connect_bones: [i16; 4]) -> Vec<u8> {
+		let mut bytes = Vec::new();
+		bytes.extend(b"blks");
+		bytes.extend(version);
+		bytes.extend(48u32.to_le_bytes());
+		bytes.extend(54u32.to_le_bytes());
+		bytes.extend(connect_bone_index.to_le_bytes());
+		bytes.extend([0; 2]);
+		bytes.extend(1301u32.to_le_bytes());
+		bytes.extend([0xFF; 16]);
+		bytes.extend(connect_bones.iter().flat_map(|bone| bone.to_le_bytes()));
+		bytes.extend(b"hpla");
+		bytes.extend(0u16.to_le_bytes());
+		bytes.push(0);
+		bytes
+	}
+
+	#[test]
+	fn reads_a_bone_list_from_the_newest_header() {
+		let bytes = skeleton(b"1031", 0, [11, 59, 60, -1]);
+		let file = SkeletonBinary::read(Cursor::new(bytes)).unwrap();
+		assert_eq!(file.character_id(), 1301);
+		assert_eq!(file.connect_bones(), [11, 59, 60, -1]);
+	}
+
+	/// The version before it names one bone, and leaves the list's bytes empty.
+	#[test]
+	fn reads_a_single_bone_from_the_prior_header() {
+		let bytes = skeleton(b"0031", 46, [0; 4]);
+		let file = SkeletonBinary::read(Cursor::new(bytes)).unwrap();
+		assert_eq!(file.connect_bones(), [46]);
+	}
 }
