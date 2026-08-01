@@ -78,6 +78,8 @@ pub mod sklb;
 pub mod skp;
 #[cfg(feature = "stm")]
 pub mod stm;
+#[cfg(feature = "svb")]
+pub mod svb;
 #[cfg(feature = "tera")]
 pub mod tera;
 #[cfg(feature = "tex")]
