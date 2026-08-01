@@ -81,10 +81,15 @@ impl Texture {
 		self.data.get(start..end.min(self.data.len()))
 	}
 
-	/// How many images the file stores at each mipmap level.
-	pub fn layers(&self) -> u16 {
+	/// How many images the file stores at a mipmap level. A volume's depth halves along with its
+	/// width and height, where a cube's six faces and an array's elements carry down the chain
+	/// unchanged, so the level only matters for a volume.
+	pub fn layers(&self, level: u8) -> u16 {
 		match self.kind() {
-			TextureKind::D3 => self.depth.max(1),
+			TextureKind::D3 => {
+				let shift = u32::from(level).min(u16::BITS - 1);
+				(self.depth >> shift).max(1)
+			}
 			TextureKind::Cube => 6,
 			TextureKind::D2Array => u16::from(self.array_size).max(1),
 			_ => 1,
@@ -221,4 +226,58 @@ pub enum FormatKind {
 	Bcn2 = 0x6000,
 	Unknown7 = 0x7000,
 	Unknown8 = 0x8000,
+}
+
+#[cfg(test)]
+mod test {
+	use std::io::Cursor;
+
+	use crate::file::File;
+
+	use super::{Texture, TextureKind};
+
+	/// A header with no pixel data, which is all the layer count is read from.
+	fn header(kind: u32, depth: u16, array_size: u8, mip_levels: u8) -> Vec<u8> {
+		let mut bytes = vec![0u8; 80];
+		bytes[..4].copy_from_slice(&(kind << TextureKind::SHIFT).to_le_bytes());
+		bytes[4..8].copy_from_slice(&0x3420u32.to_le_bytes()); // Bc1Unorm
+		bytes[8..10].copy_from_slice(&64u16.to_le_bytes());
+		bytes[10..12].copy_from_slice(&64u16.to_le_bytes());
+		bytes[12..14].copy_from_slice(&depth.to_le_bytes());
+		bytes[14] = mip_levels;
+		bytes[15] = array_size;
+		bytes
+	}
+
+	fn read(bytes: Vec<u8>) -> Texture {
+		Texture::read(Cursor::new(bytes)).unwrap()
+	}
+
+	/// A volume's slices halve with its width and height, so reading a level with the count from
+	/// level zero walks off the end of every level below it.
+	#[test]
+	fn a_volume_loses_half_its_slices_each_level() {
+		let texture = read(header(0b0000100, 24, 0, 6));
+		assert_eq!(texture.kind(), TextureKind::D3);
+		let counts = (0..6)
+			.map(|level| texture.layers(level))
+			.collect::<Vec<_>>();
+		assert_eq!(counts, [24, 12, 6, 3, 1, 1]);
+	}
+
+	/// The other layered kinds keep every slice the whole way down.
+	#[test]
+	fn faces_and_array_elements_carry_down_the_chain() {
+		let cube = read(header(0b0001000, 1, 0, 6));
+		assert_eq!(cube.kind(), TextureKind::Cube);
+		assert!((0..6).all(|level| cube.layers(level) == 6));
+
+		let array = read(header(0b1000000, 1, 32, 6));
+		assert_eq!(array.kind(), TextureKind::D2Array);
+		assert!((0..6).all(|level| array.layers(level) == 32));
+
+		let flat = read(header(0b0000010, 1, 0, 6));
+		assert_eq!(flat.kind(), TextureKind::D2);
+		assert!((0..6).all(|level| flat.layers(level) == 1));
+	}
 }
