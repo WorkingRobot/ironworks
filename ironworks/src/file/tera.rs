@@ -16,8 +16,7 @@ use super::File;
 #[derive(Debug, CopyGetters)]
 #[get_copy = "pub"]
 pub struct Terrain {
-	/// `0x01000003` in every file the game ships. Earlier versions lay the header out differently,
-	/// putting the plate size after the plates or leaving it out entirely.
+	/// `0x01000003`; earlier versions lay the header out differently.
 	version: u32,
 
 	#[br(temp)]

@@ -24,9 +24,6 @@ pub(super) fn invalid(reason: impl Into<String>) -> Error {
 }
 
 /// The last four bytes of a section header, which every offset inside it is measured from.
-///
-/// A section declares its own header length rather than a fixed one, and the four fields below sit
-/// at its end, so this is where they begin.
 const QUARTET: usize = 16;
 
 fn i32_at(bytes: &[u8], at: usize) -> Result<i32> {

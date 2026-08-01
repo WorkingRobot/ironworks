@@ -23,9 +23,7 @@ use super::File;
 #[derive(Debug, CopyGetters)]
 #[get_copy = "pub"]
 pub struct Timeline {
-	// The skipped size covers the whole timeline including this header, and equals the file length
-	// in every standalone file the game ships. Nothing is derived from it: each item's own size
-	// says where the next begins.
+	// The skipped size covers the whole timeline including this header.
 	#[br(temp, pad_before = 4)]
 	item_count: u32,
 
@@ -349,9 +347,7 @@ fn items<R: Read + Seek>(
 
 		items.push(item(reader, endian, layout, &magic, at, end)?);
 
-		// Items are contiguous and spend their whole declared size on the fields modelled here in
-		// every file the game ships. Resyncing anyway costs nothing, and stops one item whose
-		// layout has drifted from desyncing every item after it.
+		// Resync on the declared size, so one drifted item cannot desync the rest.
 		at = end;
 	}
 	Ok(items)

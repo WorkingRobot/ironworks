@@ -165,8 +165,7 @@ mod test {
 		assert_eq!(data, &[0xAA; 12]);
 	}
 
-	/// The older zone files declare a 32-byte section header rather than 24, which is why reading
-	/// the four trailing fields at a fixed offset finds nothing but padding.
+	/// Older zone files declare a 32-byte section header rather than 24.
 	#[test]
 	fn a_longer_section_header_still_finds_its_fields() {
 		let file = read(build(32, &[instance(1, 42, &[0; 44])]));

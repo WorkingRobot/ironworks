@@ -7,8 +7,7 @@ use crate::{FileStream, error::Result};
 
 use super::File;
 
-/// Versions from this one on carry a third auto layer. Nothing the game ships falls between
-/// `0x02000200` and `0x02000600`, so this boundary is xivdev's rather than the corpus's.
+/// Versions from this one on carry a third auto layer.
 const VERSION_THIRD_LAYER: u32 = 0x0200_0500;
 
 /// Versions from this one on carry a trailing value per auto layer.

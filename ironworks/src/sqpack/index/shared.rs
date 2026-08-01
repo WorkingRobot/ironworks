@@ -50,9 +50,7 @@ impl fmt::Debug for Digest {
 #[derive(BinRead, Clone, Debug)]
 #[br(map = Self::read)]
 pub struct FileMetadata {
-	/// The hash is shared by several files, so this entry stands in for all of them and carries no
-	/// location of its own. They are listed individually in [`Synonym`] records, with the full
-	/// paths that tell them apart.
+	/// The hash is shared by several files, listed individually in [`Synonym`] records.
 	pub is_synonym: bool,
 	pub data_file_id: u8,
 	pub offset: u64,

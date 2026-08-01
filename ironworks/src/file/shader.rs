@@ -110,9 +110,7 @@ impl<'a> Walk<'a> {
 			.collect())
 	}
 
-	/// The walk must land exactly where the bytecode `what` begins. Nothing in either format
-	/// declares its own size, so this is the only thing that catches a table walked with the wrong
-	/// stride.
+	/// Check the walk landed exactly where `what` begins.
 	pub fn ends_at(&self, at: usize, what: &str) -> Result<()> {
 		match self.at == at {
 			true => Ok(()),
