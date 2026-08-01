@@ -28,6 +28,7 @@ sqpack = ["dep:crc32fast", "dep:flate2"]
 zipatch = ["patch", "sqpack"]
 
 # File types
+amb = []
 atch = []
 cmp = []
 eid = []

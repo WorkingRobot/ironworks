@@ -12,6 +12,8 @@ pub mod layer;
 #[cfg(any(feature = "shcd", feature = "shpk"))]
 mod shader;
 
+#[cfg(feature = "amb")]
+pub mod amb;
 #[cfg(feature = "atch")]
 pub mod atch;
 #[cfg(feature = "cmp")]
