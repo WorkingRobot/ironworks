@@ -7,11 +7,13 @@
 mod instance;
 
 pub use instance::{
-	Aetheryte, BgPart, ChairKind, ChairMarker, Character, CollisionBox, Colour, CullingBox,
-	EventNpc, EventObject, GameObject, Instance, InstanceData, InstanceKind, LightKind,
-	LightSource, LineStyle, LineVfx, PointLightKind, PositionMarker, PositionMarkerKind,
-	QuestMarker, ShadowMode, TargetMarker, TargetMarkerKind, Transform, Treasure, TriggerBox,
-	TriggerShape, Vfx,
+	Aetheryte, AnimationState, BgPart, ChairKind, ChairMarker, Character, ClientPath, CollisionBox,
+	Colour, CullingBox, Decal, DoorState, EnvLocation, EnvShape, EnvSpace, EventNpc, EventObject,
+	ExitKind, ExitRange, FateRange, GameObject, Instance, InstanceData, InstanceKind, LightKind,
+	LightSource, LineStyle, LineVfx, MapRange, MovePath, MovePathMode, PathPoint, PointLightKind,
+	PopKind, PopRange, PositionMarker, PositionMarkerKind, PrefetchRange, QuestMarker,
+	RotationKind, RotationState, ShadowMode, SharedGroup, Sound, SoundEffectKind, TargetMarker,
+	TargetMarkerKind, Transform, Treasure, TriggerBox, TriggerShape, Vfx, Weapon, WeaponModel,
 };
 
 use binrw::BinRead;

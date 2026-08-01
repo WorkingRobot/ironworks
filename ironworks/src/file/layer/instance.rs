@@ -195,16 +195,30 @@ pub enum InstanceData {
 	Light(LightSource),
 	Vfx(Vfx),
 	PositionMarker(PositionMarker),
+	SharedGroup(SharedGroup),
+	Sound(Sound),
 	EventNpc(EventNpc),
 	Character(Character),
 	Aetheryte(Aetheryte),
+	EnvSpace(EnvSpace),
 	Treasure(Treasure),
+	Weapon(Weapon),
+	PopRange(PopRange),
+	ExitRange(ExitRange),
+	MapRange(MapRange),
 	EventObject(EventObject),
+	EnvLocation(EnvLocation),
+	EventRange(TriggerBox),
 	QuestMarker(QuestMarker),
 	CollisionBox(CollisionBox),
+	DoorRange(TriggerBox),
 	LineVfx(LineVfx),
+	ClientPath(ClientPath),
 	TargetMarker(TargetMarker),
 	ChairMarker(ChairMarker),
+	PrefetchRange(PrefetchRange),
+	FateRange(FateRange),
+	Decal(Decal),
 	CullingBox(CullingBox),
 	/// A payload with no reading yet, as the bytes between the instance's prefix and whatever
 	/// follows it.
@@ -228,18 +242,38 @@ impl InstanceData {
 			InstanceKind::PositionMarker => {
 				Self::PositionMarker(PositionMarker::read(&mut cursor)?)
 			}
+			InstanceKind::SharedGroup => {
+				Self::SharedGroup(SharedGroup::parse(bytes, at, &mut cursor)?)
+			}
+			InstanceKind::Sound => Self::Sound(Sound::parse(bytes, at, &mut cursor)?),
 			InstanceKind::EventNpc => Self::EventNpc(EventNpc::read(&mut cursor)?),
 			InstanceKind::Character => Self::Character(Character::read(&mut cursor)?),
 			InstanceKind::Aetheryte => Self::Aetheryte(Aetheryte::read(&mut cursor)?),
+			InstanceKind::EnvSpace => Self::EnvSpace(EnvSpace::parse(bytes, at, &mut cursor)?),
 			InstanceKind::Treasure => Self::Treasure(Treasure::read(&mut cursor)?),
+			InstanceKind::Weapon => Self::Weapon(Weapon::read(&mut cursor)?),
+			InstanceKind::PopRange => Self::PopRange(PopRange::parse(bytes, at, &mut cursor)?),
+			InstanceKind::ExitRange => Self::ExitRange(ExitRange::read(&mut cursor)?),
+			InstanceKind::MapRange => Self::MapRange(MapRange::read(&mut cursor)?),
 			InstanceKind::EventObject => Self::EventObject(EventObject::read(&mut cursor)?),
+			InstanceKind::EnvLocation => {
+				Self::EnvLocation(EnvLocation::parse(bytes, at, &mut cursor)?)
+			}
+			InstanceKind::EventRange => Self::EventRange(TriggerBox::read(&mut cursor)?),
 			InstanceKind::QuestMarker => Self::QuestMarker(QuestMarker::read(&mut cursor)?),
 			InstanceKind::CollisionBox => {
 				Self::CollisionBox(CollisionBox::parse(bytes, at, &mut cursor)?)
 			}
+			InstanceKind::DoorRange => Self::DoorRange(TriggerBox::read(&mut cursor)?),
 			InstanceKind::LineVfx => Self::LineVfx(LineVfx::read(&mut cursor)?),
+			InstanceKind::ClientPath => {
+				Self::ClientPath(ClientPath::parse(bytes, at, &mut cursor)?)
+			}
 			InstanceKind::TargetMarker => Self::TargetMarker(TargetMarker::read(&mut cursor)?),
 			InstanceKind::ChairMarker => Self::ChairMarker(ChairMarker::read(&mut cursor)?),
+			InstanceKind::PrefetchRange => Self::PrefetchRange(PrefetchRange::read(&mut cursor)?),
+			InstanceKind::FateRange => Self::FateRange(FateRange::read(&mut cursor)?),
+			InstanceKind::Decal => Self::Decal(Decal::parse(bytes, at, &mut cursor)?),
 			InstanceKind::CullingBox => Self::CullingBox(CullingBox::read(&mut cursor)?),
 			_ => Self::Unknown(payload.to_vec()),
 		})
@@ -316,6 +350,18 @@ struct BgPartFields {
 
 fn pair(low: u32, high: u32) -> u64 {
 	u64::from(low) | (u64::from(high) << 32)
+}
+
+/// A reader at `at`, for the structures a payload points off to rather than inlining.
+fn seek_to(bytes: &[u8], at: usize) -> Result<Cursor<&[u8]>> {
+	bytes
+		.get(at..)
+		.map(Cursor::new)
+		.ok_or_else(|| invalid(format!("offset {at:#x} is past the end of the file")))
+}
+
+fn count(declared: i32) -> Result<usize> {
+	usize::try_from(declared).map_err(|_| invalid(format!("a count of {declared}")))
 }
 
 impl BgPart {
@@ -506,6 +552,229 @@ pub struct PositionMarker {
 	comment_en_offset: u32,
 }
 
+/// Whether a shared group's door opens on approach or is held open or shut.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum DoorState {
+	Auto = 1,
+	Open = 2,
+	Closed = 3,
+}
+
+/// Whether a shared group's rotation runs.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum RotationState {
+	Rounding = 1,
+	Stopped = 2,
+}
+
+/// The state an animated property of a shared group starts in.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum AnimationState {
+	Play = 0,
+	Stop = 1,
+	Replay = 2,
+	Reset = 3,
+}
+
+/// What drives a shared group along its path.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum MovePathMode {
+	None = 0,
+	SharedGroupAction = 1,
+	Timeline = 2,
+}
+
+/// Which axes a shared group turns on as it moves.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum RotationKind {
+	NoRotate = 0,
+	AllAxis = 1,
+	YAxisOnly = 2,
+}
+
+/// How a shared group moves and sways along the path it is bound to.
+#[binread]
+#[br(little)]
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct MovePath {
+	mode: MovePathMode,
+	#[br(map = |raw: u8| raw != 0, pad_after = 1)]
+	auto_play: bool,
+	time: u16,
+	#[br(map = |raw: u8| raw != 0)]
+	loop_playback: bool,
+	#[br(map = |raw: u8| raw != 0, pad_after = 2)]
+	reverse: bool,
+	rotation: RotationKind,
+	accelerate_time: u16,
+	decelerate_time: u16,
+	vertical_swing_range: [f32; 2],
+	horizontal_swing_range: [f32; 2],
+	swing_move_speed_range: [f32; 2],
+	swing_rotation: [f32; 2],
+	swing_rotation_speed_range: [f32; 2],
+}
+
+/// An `.sgb` placed in the zone, and the state its members start in.
+#[derive(Debug, Getters, CopyGetters)]
+pub struct SharedGroup {
+	#[get = "pub"]
+	asset_path: String,
+	#[get_copy = "pub"]
+	initial_door_state: DoorState,
+	#[get_copy = "pub"]
+	initial_rotation_state: RotationState,
+	#[get_copy = "pub"]
+	initial_transform_state: AnimationState,
+	#[get_copy = "pub"]
+	initial_colour_state: AnimationState,
+	#[get_copy = "pub"]
+	random_timeline_auto_play: bool,
+	#[get_copy = "pub"]
+	random_timeline_loop_playback: bool,
+	#[get_copy = "pub"]
+	collision_controllable_without_event_object: bool,
+	/// The [`ClientPath`] the group runs along, or zero.
+	#[get_copy = "pub"]
+	bound_client_path_instance_id: u32,
+	#[get = "pub"]
+	move_path: MovePath,
+	/// Per-member overrides of what the `.sgb` itself says, undecoded.
+	#[get = "pub"]
+	overrides: Vec<u8>,
+}
+
+#[binread]
+#[br(little)]
+struct SharedGroupFields {
+	asset_path: i32,
+	initial_door_state: DoorState,
+	overrides: i32,
+	_override_count: i32,
+	initial_rotation_state: RotationState,
+	#[br(map = |raw: u8| raw != 0)]
+	random_timeline_auto_play: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	random_timeline_loop_playback: bool,
+	#[br(map = |raw: u8| raw != 0, pad_after = 1)]
+	collision_controllable_without_event_object: bool,
+	bound_client_path_instance_id: u32,
+	#[br(pad_after = 4)]
+	move_path: i32,
+	initial_transform_state: AnimationState,
+	initial_colour_state: AnimationState,
+}
+
+impl SharedGroup {
+	fn parse(bytes: &[u8], at: usize, cursor: &mut Cursor<&[u8]>) -> Result<Self> {
+		let fields = SharedGroupFields::read(cursor)?;
+		let overrides = seek(at, fields.overrides)?;
+		let move_path = seek(at, fields.move_path)?;
+		Ok(Self {
+			asset_path: string(bytes, seek(at, fields.asset_path)?),
+			initial_door_state: fields.initial_door_state,
+			initial_rotation_state: fields.initial_rotation_state,
+			initial_transform_state: fields.initial_transform_state,
+			initial_colour_state: fields.initial_colour_state,
+			random_timeline_auto_play: fields.random_timeline_auto_play,
+			random_timeline_loop_playback: fields.random_timeline_loop_playback,
+			collision_controllable_without_event_object: fields
+				.collision_controllable_without_event_object,
+			bound_client_path_instance_id: fields.bound_client_path_instance_id,
+			move_path: MovePath::read(&mut seek_to(bytes, move_path)?)?,
+			overrides: bytes.get(overrides..move_path).unwrap_or_default().to_vec(),
+		})
+	}
+}
+
+/// The shape a sound is emitted over.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum SoundEffectKind {
+	Point = 3,
+	PointDirectional = 4,
+	Line = 5,
+	PolyLine = 6,
+	Surface = 7,
+	BoardObstruction = 8,
+	BoxObstruction = 9,
+	PolyLineObstruction = 11,
+	PolygonObstruction = 12,
+	LineExtController = 13,
+	Polygon = 14,
+}
+
+/// A placed sound, as an `.scd` and the volume it plays over.
+#[derive(Debug, Getters, CopyGetters)]
+pub struct Sound {
+	#[get = "pub"]
+	asset_path: String,
+	#[get_copy = "pub"]
+	kind: SoundEffectKind,
+	#[get_copy = "pub"]
+	auto_play: bool,
+	#[get_copy = "pub"]
+	no_far_clip: bool,
+	#[get_copy = "pub"]
+	point_selection: u32,
+	/// The geometry the [`kind`](Self::kind) is emitted over, undecoded.
+	#[get = "pub"]
+	binary: Vec<u8>,
+}
+
+#[binread]
+#[br(little)]
+struct SoundParameters {
+	kind: SoundEffectKind,
+	#[br(map = |raw: u8| raw != 0)]
+	auto_play: bool,
+	#[br(map = |raw: u8| raw != 0, pad_after = 2)]
+	no_far_clip: bool,
+	binary: i32,
+	binary_size: i32,
+	point_selection: u32,
+}
+
+impl Sound {
+	fn parse(bytes: &[u8], at: usize, cursor: &mut Cursor<&[u8]>) -> Result<Self> {
+		let parameters = i32::read_le(cursor)?;
+		let asset_path = i32::read_le(cursor)?;
+
+		let parameters_at = seek(at, parameters)?;
+		let parameters = SoundParameters::read(&mut seek_to(bytes, parameters_at)?)?;
+		let binary = seek(parameters_at, parameters.binary)?;
+		Ok(Self {
+			asset_path: string(bytes, seek(at, asset_path)?),
+			kind: parameters.kind,
+			auto_play: parameters.auto_play,
+			no_far_clip: parameters.no_far_clip,
+			point_selection: parameters.point_selection,
+			binary: bytes
+				.get(binary..binary + count(parameters.binary_size)?)
+				.unwrap_or_default()
+				.to_vec(),
+		})
+	}
+}
+
 /// The base an instance is spawned from, as a row of the sheet its kind names.
 #[binread]
 #[br(little)]
@@ -549,6 +818,79 @@ pub struct Aetheryte {
 	unknown: u32,
 }
 
+/// The volume an environment override covers.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum EnvShape {
+	Ellipsoid = 1,
+	Cuboid = 2,
+	Cylinder = 3,
+}
+
+/// A volume that swaps in its own environment and sound settings.
+#[derive(Debug, Getters, CopyGetters)]
+pub struct EnvSpace {
+	/// The `.envb` the space applies.
+	#[get = "pub"]
+	asset_path: String,
+	#[get_copy = "pub"]
+	bound_instance_id: u32,
+	#[get_copy = "pub"]
+	shape: EnvShape,
+	#[get_copy = "pub"]
+	env_map_shooting_point: bool,
+	#[get_copy = "pub"]
+	priority: u8,
+	#[get_copy = "pub"]
+	effective_range: f32,
+	#[get_copy = "pub"]
+	interpolation_time: i32,
+	#[get_copy = "pub"]
+	reverb: f32,
+	#[get_copy = "pub"]
+	filter: f32,
+	/// The `.essb` the space applies.
+	#[get = "pub"]
+	sound_asset_path: String,
+}
+
+#[binread]
+#[br(little)]
+struct EnvSpaceFields {
+	asset_path: i32,
+	bound_instance_id: u32,
+	shape: EnvShape,
+	#[br(map = |raw: u8| raw != 0)]
+	env_map_shooting_point: bool,
+	#[br(pad_after = 2)]
+	priority: u8,
+	effective_range: f32,
+	interpolation_time: i32,
+	reverb: f32,
+	filter: f32,
+	sound_asset_path: i32,
+}
+
+impl EnvSpace {
+	fn parse(bytes: &[u8], at: usize, cursor: &mut Cursor<&[u8]>) -> Result<Self> {
+		let fields = EnvSpaceFields::read(cursor)?;
+		Ok(Self {
+			asset_path: string(bytes, seek(at, fields.asset_path)?),
+			bound_instance_id: fields.bound_instance_id,
+			shape: fields.shape,
+			env_map_shooting_point: fields.env_map_shooting_point,
+			priority: fields.priority,
+			effective_range: fields.effective_range,
+			interpolation_time: fields.interpolation_time,
+			reverb: fields.reverb,
+			filter: fields.filter,
+			sound_asset_path: string(bytes, seek(at, fields.sound_asset_path)?),
+		})
+	}
+}
+
 /// A treasure coffer, as a row of `Treasure`.
 #[binread]
 #[br(little)]
@@ -556,6 +898,152 @@ pub struct Aetheryte {
 #[get_copy = "pub"]
 pub struct Treasure {
 	object: GameObject,
+}
+
+/// Which weapon a character holds, as the three ids that name its model.
+#[binread]
+#[br(little)]
+#[derive(Debug, Clone, Copy, CopyGetters)]
+#[get_copy = "pub"]
+pub struct WeaponModel {
+	skeleton_id: u16,
+	pattern_id: u16,
+	image_change_id: u16,
+	staining_id: u16,
+}
+
+/// A weapon placed on its own.
+#[binread]
+#[br(little)]
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct Weapon {
+	model: WeaponModel,
+	#[br(map = |raw: u8| raw != 0)]
+	visible: bool,
+}
+
+/// What a pop range spawns.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum PopKind {
+	Player = 1,
+	Npc = 2,
+	Content = 3,
+}
+
+/// Where a group of characters appears, as offsets from the instance.
+#[derive(Debug, Getters, CopyGetters)]
+pub struct PopRange {
+	#[get_copy = "pub"]
+	kind: PopKind,
+	#[get_copy = "pub"]
+	inner_radius_ratio: f32,
+	#[get = "pub"]
+	positions: Vec<[f32; 3]>,
+}
+
+#[binread]
+#[br(little)]
+struct PopRangeFields {
+	kind: PopKind,
+	positions: i32,
+	position_count: i32,
+	inner_radius_ratio: f32,
+}
+
+impl PopRange {
+	fn parse(bytes: &[u8], at: usize, cursor: &mut Cursor<&[u8]>) -> Result<Self> {
+		let fields = PopRangeFields::read(cursor)?;
+		// The positions are measured from the offset field rather than from the instance.
+		let mut positions = seek_to(bytes, seek(at + PREFIX + 4, fields.positions)?)?;
+		Ok(Self {
+			kind: fields.kind,
+			inner_radius_ratio: fields.inner_radius_ratio,
+			positions: (0..count(fields.position_count)?)
+				.map(|_| Ok(<[f32; 3]>::read_le(&mut positions)?))
+				.collect::<Result<Vec<_>>>()?,
+		})
+	}
+}
+
+/// Which way an exit range sends the player.
+#[binread]
+#[br(little, repr = i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum ExitKind {
+	ZoneLine = 1,
+	Invisible = 2,
+}
+
+/// A walkable transition into another zone.
+#[binread]
+#[br(little)]
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct ExitRange {
+	trigger: TriggerBox,
+	kind: ExitKind,
+	zone_id: u16,
+	/// A row of `TerritoryType`.
+	territory_type_id: u16,
+	index: i32,
+	destination_instance_id: u32,
+	return_instance_id: u32,
+	/// The heading the player arrives on, in radians.
+	player_running_direction: f32,
+}
+
+/// The area a place name, map, weather and music apply over.
+#[binread]
+#[br(little)]
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct MapRange {
+	trigger: TriggerBox,
+	/// A row of `Map`.
+	map: u32,
+	/// A row of `PlaceName`, for the wider area.
+	place_name_block: u32,
+	/// A row of `PlaceName`, for the spot itself.
+	place_name_spot: u32,
+	/// A row of `WeatherRate`.
+	weather: u32,
+	/// A row of `BGM`.
+	#[br(pad_after = 10)]
+	bgm: u32,
+	housing_block_id: u8,
+	#[br(map = |raw: u8| raw != 0)]
+	rest_bonus_effective: bool,
+	discovery_id: u8,
+	#[br(map = |raw: u8| raw != 0)]
+	map_enabled: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	place_name_enabled: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	discovery_enabled: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	bgm_enabled: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	weather_enabled: bool,
+	/// Whether the area is a sanctuary.
+	#[br(map = |raw: u8| raw != 0)]
+	rest_bonus_enabled: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	bgm_play_zone_in_only: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	lift_enabled: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	housing_enabled: bool,
+	#[br(map = |raw: u8| raw != 0, pad_after = 1)]
+	log_flying_height_max_err: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	mounts_and_ornaments_disabled: bool,
+	#[br(map = |raw: u8| raw != 0)]
+	lalafell_only: bool,
 }
 
 /// An interactable object, as a row of `EObj`.
@@ -567,6 +1055,27 @@ pub struct EventObject {
 	object: GameObject,
 	bound_instance_id: u32,
 	unknown: u8,
+}
+
+/// The environment a part of the zone is lit and reflected with.
+#[derive(Debug, Getters)]
+#[get = "pub"]
+pub struct EnvLocation {
+	/// The `.amb` holding the spherical harmonic ambient light.
+	ambient_light_asset_path: String,
+	/// The `.tex` cube map reflections are taken from.
+	env_map_asset_path: String,
+}
+
+impl EnvLocation {
+	fn parse(bytes: &[u8], at: usize, cursor: &mut Cursor<&[u8]>) -> Result<Self> {
+		let ambient_light_asset_path = i32::read_le(cursor)?;
+		let env_map_asset_path = i32::read_le(cursor)?;
+		Ok(Self {
+			ambient_light_asset_path: string(bytes, seek(at, ambient_light_asset_path)?),
+			env_map_asset_path: string(bytes, seek(at, env_map_asset_path)?),
+		})
+	}
 }
 
 /// A quest marker, wholly unread.
@@ -669,6 +1178,38 @@ pub struct LineVfx {
 	style: LineStyle,
 }
 
+/// One node of a [`ClientPath`].
+#[binread]
+#[br(little)]
+#[derive(Debug, Clone, Copy, CopyGetters)]
+#[get_copy = "pub"]
+pub struct PathPoint {
+	position: [f32; 3],
+	id: u16,
+	#[br(map = |raw: u8| raw != 0, pad_after = 1)]
+	select: bool,
+}
+
+/// A route through the zone, which a [`SharedGroup`] can be bound to.
+#[derive(Debug, Getters)]
+pub struct ClientPath {
+	#[get = "pub"]
+	control_points: Vec<PathPoint>,
+}
+
+impl ClientPath {
+	fn parse(bytes: &[u8], at: usize, cursor: &mut Cursor<&[u8]>) -> Result<Self> {
+		let control_points = i32::read_le(cursor)?;
+		let control_point_count = i32::read_le(cursor)?;
+		let mut points = seek_to(bytes, seek(at, control_points)?)?;
+		Ok(Self {
+			control_points: (0..count(control_point_count)?)
+				.map(|_| Ok(PathPoint::read(&mut points)?))
+				.collect::<Result<Vec<_>>>()?,
+		})
+	}
+}
+
 /// What a target marker anchors.
 #[binread]
 #[br(little, repr = i32)]
@@ -717,6 +1258,48 @@ pub struct ChairMarker {
 	#[br(map = |raw: u8| raw != 0)]
 	back: bool,
 	kind: ChairKind,
+}
+
+/// A volume that starts loading what the [`ExitRange`] it names leads to.
+#[binread]
+#[br(little)]
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct PrefetchRange {
+	trigger: TriggerBox,
+	bound_instance_id: u32,
+}
+
+/// The area a FATE plays out over.
+#[binread]
+#[br(little)]
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct FateRange {
+	trigger: TriggerBox,
+	/// A row of `FateLayoutLabel`.
+	fate_layout_label_id: u32,
+}
+
+/// A texture projected onto whatever the instance is placed against.
+#[derive(Debug, Getters)]
+#[get = "pub"]
+pub struct Decal {
+	diffuse_path: String,
+	normal_path: String,
+	specular_path: String,
+}
+
+impl Decal {
+	fn parse(bytes: &[u8], at: usize, cursor: &mut Cursor<&[u8]>) -> Result<Self> {
+		let paths = <[i32; 3]>::read_le(cursor)?;
+		let path = |offset| -> Result<String> { Ok(string(bytes, seek(at, offset)?)) };
+		Ok(Self {
+			diffuse_path: path(paths[0])?,
+			normal_path: path(paths[1])?,
+			specular_path: path(paths[2])?,
+		})
+	}
 }
 
 /// A volume outside which the scenery it covers is not drawn.
