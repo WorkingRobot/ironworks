@@ -432,7 +432,8 @@ enum BoneTable {
 #[derive(Debug)]
 struct NeckMorph {
 	position: [f32; 3],
-	unknown1: u32,
+	/// Weights over [`Self::bone_index`], summing to 255.
+	bone_weight: [u8; 4],
 	normal: [f32; 3],
 	bone_index: [u8; 4],
 }
