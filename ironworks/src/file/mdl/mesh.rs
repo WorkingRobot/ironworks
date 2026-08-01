@@ -70,15 +70,13 @@ impl Mesh {
 		// Get the elements for this mesh's vertices.
 		let elements = &self.file.vertex_declarations[self.mesh_index].0;
 
-		// Vertices are stored across multipe streams of data - set up a cursor for each.
-		let mut streams = (0..usize::from(mesh.vertex_stream_count))
-			.map(|index| {
-				let cursor = Cursor::new(&self.file.data);
-				let offset = self.file.vertex_offset[usize::from(self.level)]
-					+ mesh.vertex_buffer_offset[index];
-				(cursor, u64::from(offset) - self.file.data_offset)
-			})
-			.collect::<Vec<_>>();
+		// Vertices are stored across multipe streams of data - set up a cursor for each. A mesh
+		// can name more streams than it carries offsets for, so the offsets are what bound this.
+		let mut streams = mesh.vertex_buffer_offset.map(|buffer_offset| {
+			let cursor = Cursor::new(&self.file.data);
+			let offset = self.file.vertex_offset[usize::from(self.level)] + buffer_offset;
+			(cursor, u64::from(offset) - self.file.data_offset)
+		});
 
 		// Read in the vertices
 		// TODO: keep an eye on perf here - could thrash cache a bit if llvm doesn't magic it enough
@@ -86,7 +84,13 @@ impl Mesh {
 			.iter()
 			.map(|element| -> Result<_> {
 				let stream = usize::from(element.stream);
-				let (ref mut cursor, base_offset) = streams[stream];
+				let Some((cursor, base_offset)) = streams.get_mut(stream) else {
+					return Err(Error::Invalid(
+						ErrorValue::Other("model vertex element".into()),
+						format!("element names stream {stream}, beyond the 3 a mesh carries"),
+					));
+				};
+				let base_offset = *base_offset;
 				let stride = u64::from(mesh.vertex_buffer_stride[stream]);
 
 				let offsets = (0..mesh.vertex_count).scan(
