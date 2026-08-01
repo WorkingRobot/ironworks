@@ -48,6 +48,8 @@ pub mod gzd;
 pub mod hwc;
 #[cfg(feature = "imc")]
 pub mod imc;
+#[cfg(feature = "lcb")]
+pub mod lcb;
 #[cfg(feature = "lgb")]
 pub mod lgb;
 #[cfg(feature = "luab")]
