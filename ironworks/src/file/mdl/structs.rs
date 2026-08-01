@@ -241,19 +241,20 @@ pub enum VertexAttributeKind {
 	Color = 7,
 }
 
+// Fields are declared least significant bit first.
 #[bitfield]
 #[binread]
 #[derive(Debug)]
 #[br(map = Self::from_bytes)]
 struct Flags1 {
-	dust_occlusion_enabled: bool,
-	show_occlusion_enabled: bool,
-	rain_occlusion_enabled: bool,
-	unknown1: bool,
-	lighting_reflection_enabled: bool,
-	waving_animation_disabled: bool,
-	light_shadow_disabled: bool,
 	shadow_disabled: bool,
+	light_shadow_disabled: bool,
+	waving_animation_disabled: bool,
+	lighting_reflection_enabled: bool,
+	unknown1: bool,
+	rain_occlusion_enabled: bool,
+	snow_occlusion_enabled: bool,
+	dust_occlusion_enabled: bool,
 }
 
 #[bitfield]
@@ -261,14 +262,14 @@ struct Flags1 {
 #[derive(Debug)]
 #[br(map = Self::from_bytes)]
 struct Flags2 {
-	unknown2: bool,
-	bg_uv_scroll_enabled: bool,
-	enable_force_non_resident: bool,
-	extra_lod_enabled: bool,
-	shadow_mask_enabled: bool,
-	force_lod_range_enabled: bool,
-	edge_geometry_enabled: bool,
 	unknown3: bool,
+	edge_geometry_enabled: bool,
+	force_lod_range_enabled: bool,
+	shadow_mask_enabled: bool,
+	extra_lod_enabled: bool,
+	enable_force_non_resident: bool,
+	bg_uv_scroll_enabled: bool,
+	unknown2: bool,
 }
 
 #[binread]
