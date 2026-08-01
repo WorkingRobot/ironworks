@@ -487,7 +487,7 @@ impl ColorTable {
 			anisotropy: at(19),
 			sphere_mask: at(21),
 			shader_index: at(24) as u16,
-			tile_index: at(25) as u16,
+			tile_index: (at(25) * 64.) as u16,
 			tile_alpha: at(26),
 			sphere_index: at(27) as u16,
 			tile_transform: [at(28), at(29), at(30), at(31)],
@@ -570,6 +570,19 @@ mod test {
 		assert!(dye.dyes(DyeField::Metalness));
 		assert!(!dye.dyes(DyeField::Roughness));
 		assert!(table.dye_row(1).is_none());
+	}
+
+	/// A tile index is stored as `(index + 0.5) / 64`.
+	#[test]
+	fn scales_a_tile_index() {
+		let mut table = vec![0u16; 32 * 32];
+		table[25] = 0x2D80;
+		table[32 + 25] = 0x3BF0;
+
+		let file = Material::read(Cursor::new(material(0x53, &table))).unwrap();
+		let table = file.color_table().unwrap();
+		assert_eq!(table.row_values(0).unwrap().tile_index, 5);
+		assert_eq!(table.row_values(1).unwrap().tile_index, 63);
 	}
 
 	#[test]
