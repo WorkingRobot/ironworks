@@ -7,7 +7,7 @@ mod animation;
 #[cfg(any(feature = "eqp", feature = "gmp"))]
 mod block_table;
 mod file;
-#[cfg(feature = "lgb")]
+#[cfg(any(feature = "lgb", feature = "lvb", feature = "sgb"))]
 pub mod layer;
 #[cfg(any(feature = "shcd", feature = "shpk"))]
 mod shader;
@@ -54,6 +54,8 @@ pub mod lcb;
 pub mod lgb;
 #[cfg(feature = "luab")]
 pub mod luab;
+#[cfg(feature = "lvb")]
+pub mod lvb;
 #[cfg(feature = "mdl")]
 pub mod mdl;
 #[cfg(feature = "mtrl")]
@@ -70,6 +72,8 @@ pub mod pcb;
 pub mod phyb;
 #[cfg(feature = "scd")]
 pub mod scd;
+#[cfg(feature = "sgb")]
+pub mod sgb;
 #[cfg(feature = "shcd")]
 pub mod shcd;
 #[cfg(feature = "shpk")]

@@ -178,15 +178,15 @@ impl Instance {
 			id,
 			name: string(bytes, seek(at, name)?),
 			transform,
-			data: InstanceData::parse(bytes, at, &head[PREFIX..], kind)?,
+			data: InstanceData::parse(bytes, at, &head[PREFIX..], kind),
 		})
 	}
 }
 
 /// The payload behind an [`Instance`], read according to its [`InstanceKind`].
 ///
-/// A kind the game ships but nobody has specified lands in [`Unknown`](Self::Unknown) with its
-/// bytes intact, so an unmodelled type costs that payload rather than the file.
+/// A payload nobody has specified, or one an older file laid out differently, lands in
+/// [`Unknown`](Self::Unknown) with its bytes intact, so it costs that payload rather than the file.
 #[derive(Debug)]
 pub enum InstanceData {
 	/// The instance carries no payload.
@@ -216,6 +216,7 @@ pub enum InstanceData {
 	ClientPath(ClientPath),
 	TargetMarker(TargetMarker),
 	ChairMarker(ChairMarker),
+	ClickableRange(TriggerBox),
 	PrefetchRange(PrefetchRange),
 	FateRange(FateRange),
 	Decal(Decal),
@@ -230,7 +231,11 @@ pub enum InstanceData {
 }
 
 impl InstanceData {
-	fn parse(bytes: &[u8], at: usize, payload: &[u8], kind: InstanceKind) -> Result<Self> {
+	fn parse(bytes: &[u8], at: usize, payload: &[u8], kind: InstanceKind) -> Self {
+		Self::read(bytes, at, payload, kind).unwrap_or_else(|_| Self::Unknown(payload.to_vec()))
+	}
+
+	fn read(bytes: &[u8], at: usize, payload: &[u8], kind: InstanceKind) -> Result<Self> {
 		// A payload reaching back into the file for a string measures the offset from the instance,
 		// so the whole file is passed alongside the slice.
 		let mut cursor = Cursor::new(payload);
@@ -271,6 +276,7 @@ impl InstanceData {
 			}
 			InstanceKind::TargetMarker => Self::TargetMarker(TargetMarker::read(&mut cursor)?),
 			InstanceKind::ChairMarker => Self::ChairMarker(ChairMarker::read(&mut cursor)?),
+			InstanceKind::ClickableRange => Self::ClickableRange(TriggerBox::read(&mut cursor)?),
 			InstanceKind::PrefetchRange => Self::PrefetchRange(PrefetchRange::read(&mut cursor)?),
 			InstanceKind::FateRange => Self::FateRange(FateRange::read(&mut cursor)?),
 			InstanceKind::Decal => Self::Decal(Decal::parse(bytes, at, &mut cursor)?),

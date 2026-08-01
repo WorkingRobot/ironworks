@@ -5,6 +5,11 @@
 //! rest of it. `.lgb` holds a group directly; `.sgb` and `.lvb` wrap one in a scene.
 
 mod instance;
+#[cfg(any(feature = "sgb", feature = "lvb"))]
+mod scene;
+
+#[cfg(any(feature = "sgb", feature = "lvb"))]
+pub use scene::Scene;
 
 pub use instance::{
 	Aetheryte, AnimationState, BgPart, ChairKind, ChairMarker, Character, ClientPath, CollisionBox,
@@ -27,6 +32,42 @@ pub(super) fn invalid(reason: impl Into<String>) -> Error {
 
 /// The last four bytes of a section header, which every offset inside it is measured from.
 const QUARTET: usize = 16;
+
+/// The file header, ahead of the first section.
+const HEADER: usize = 0x0C;
+
+/// The bytes of a file opening with `magic`, and where its first `section` begins.
+///
+/// The header declares a section count, but every file the game ships declares one and carries
+/// one, so the first is the only one looked for. Some of the older files pad ahead of it, so it is
+/// found rather than assumed.
+pub(super) fn section(
+	mut stream: impl crate::FileStream,
+	magic: &[u8; 4],
+	section: &[u8; 4],
+) -> Result<(Vec<u8>, usize)> {
+	let mut bytes = Vec::new();
+	stream.read_to_end(&mut bytes)?;
+
+	if bytes.get(..4) != Some(magic) {
+		return Err(invalid(format!(
+			"not a {} file",
+			String::from_utf8_lossy(magic)
+		)));
+	}
+
+	let at = (HEADER..bytes.len().saturating_sub(4))
+		.find(|&at| bytes[at..at + 4] == *section)
+		.ok_or_else(|| invalid(format!("no {} section", String::from_utf8_lossy(section))))?;
+	Ok((bytes, at))
+}
+
+/// The scene an `.sgb` or `.lvb` opening with `magic` holds.
+#[cfg(any(feature = "sgb", feature = "lvb"))]
+pub(super) fn scene(stream: impl crate::FileStream, magic: &[u8; 4]) -> Result<Scene> {
+	let (bytes, at) = section(stream, magic, b"SCN1")?;
+	Scene::parse(&bytes, at)
+}
 
 fn i32_at(bytes: &[u8], at: usize) -> Result<i32> {
 	bytes
@@ -86,47 +127,84 @@ impl LayerGroup {
 	pub fn layers(&self) -> &[Layer] {
 		&self.layers
 	}
+}
 
-	/// Reads the group whose section header starts at `at`.
-	///
-	/// `size` is the section header's own length, which is where the four trailing fields are found
-	/// and what everything inside the section is measured from.
-	pub(super) fn parse(bytes: &[u8], at: usize, size: usize) -> Result<Self> {
-		let heap = at
-			.checked_add(size)
-			.and_then(|end| end.checked_sub(QUARTET))
-			.ok_or_else(|| invalid(format!("section at {at:#x} declares a size of {size}")))?;
+/// Reads every group of a file at once.
+///
+/// `heaps` are the four fields each group ends with, which everything inside it is measured from.
+/// `rest` is whatever else the file lays out around them, so that an instance is bounded by the
+/// next structure rather than by the end of the file.
+pub(super) fn groups(bytes: &[u8], heaps: &[usize], rest: &[usize]) -> Result<Vec<LayerGroup>> {
+	// An instance runs to whatever structure follows it, so the whole file has to be laid out
+	// before any instance can be read.
+	let mut bounds = Vec::from(rest);
+	bounds.push(bytes.len());
 
+	let plans = heaps
+		.iter()
+		.map(|&heap| {
+			let plan = GroupPlan::parse(bytes, heap)?;
+			bounds.extend(plan.layers.iter().map(|layer| layer.at));
+			bounds.extend(plan.layers.iter().flat_map(|layer| &layer.instances));
+			Ok(plan)
+		})
+		.collect::<Result<Vec<_>>>()?;
+
+	bounds.sort_unstable();
+	bounds.dedup();
+	plans
+		.into_iter()
+		.map(|plan| plan.read(bytes, &bounds))
+		.collect()
+}
+
+/// The one group of a section whose header starts at `at`.
+///
+/// `size` is the section header's own length, which is where the four trailing fields are found.
+pub(super) fn section_group(bytes: &[u8], at: usize, size: usize) -> Result<LayerGroup> {
+	let heap = at
+		.checked_add(size)
+		.and_then(|end| end.checked_sub(QUARTET))
+		.ok_or_else(|| invalid(format!("section at {at:#x} declares a size of {size}")))?;
+
+	let [group] = <[LayerGroup; 1]>::try_from(groups(bytes, &[heap], &[])?)
+		.map_err(|_| invalid("a section holding other than one group"))?;
+	Ok(group)
+}
+
+/// A group's fields, and where each of its layers starts.
+struct GroupPlan {
+	id: i32,
+	name: String,
+	layers: Vec<LayerPlan>,
+}
+
+impl GroupPlan {
+	fn parse(bytes: &[u8], heap: usize) -> Result<Self> {
 		let id = i32_at(bytes, heap)?;
 		let name = string(bytes, seek(heap, i32_at(bytes, heap + 4)?)?);
 		let table = seek(heap, i32_at(bytes, heap + 8)?)?;
 		let count = i32_at(bytes, heap + 12)?;
 		let count = usize::try_from(count)
-			.map_err(|_| invalid(format!("section at {at:#x} declares {count} layers")))?;
+			.map_err(|_| invalid(format!("group at {heap:#x} declares {count} layers")))?;
 
-		let starts = (0..count)
-			.map(|index| seek(table, i32_at(bytes, table + index * 4)?))
-			.collect::<Result<Vec<_>>>()?;
-
-		// An instance runs to whatever structure follows it, so the layers have to be laid out
-		// before any of their instances can be read.
-		let mut plans = Vec::with_capacity(starts.len());
-		let mut bounds = vec![bytes.len()];
-		bounds.extend(&starts);
-		for &start in &starts {
-			let plan = LayerPlan::parse(bytes, start)?;
-			bounds.extend(&plan.instances);
-			plans.push(plan);
-		}
-		bounds.sort_unstable();
-		bounds.dedup();
-
-		let layers = plans
-			.into_iter()
-			.map(|plan| plan.read(bytes, &bounds))
+		let layers = (0..count)
+			.map(|index| LayerPlan::parse(bytes, seek(table, i32_at(bytes, table + index * 4)?)?))
 			.collect::<Result<Vec<_>>>()?;
 
 		Ok(Self { id, name, layers })
+	}
+
+	fn read(self, bytes: &[u8], bounds: &[usize]) -> Result<LayerGroup> {
+		Ok(LayerGroup {
+			id: self.id,
+			name: self.name,
+			layers: self
+				.layers
+				.into_iter()
+				.map(|plan| plan.read(bytes, bounds))
+				.collect::<Result<Vec<_>>>()?,
+		})
 	}
 }
 

@@ -4,9 +4,6 @@ use crate::{FileStream, error::Result};
 
 use super::{File, layer::LayerGroup};
 
-/// The file header, ahead of the first section.
-const HEADER: usize = 0x0C;
-
 /// A zone's layer group: where everything in a zone is placed, one file per group.
 ///
 /// A zone ships seven of these beside its models, named for the group each carries: `bg`,
@@ -22,23 +19,12 @@ impl LayerGroupFile {
 }
 
 impl File for LayerGroupFile {
-	fn read(mut stream: impl FileStream) -> Result<Self> {
-		let mut bytes = Vec::new();
-		stream.read_to_end(&mut bytes)?;
-
-		if bytes.get(..4) != Some(b"LGB1") {
-			return Err(super::layer::invalid("not an LGB1 file"));
-		}
-
-		// The header declares a section count, but every file the game ships declares one and
-		// carries one, so the first is the only one read.
-		let at = (HEADER..bytes.len().saturating_sub(4))
-			.find(|&at| bytes[at..at + 4] == *b"LGP1")
-			.ok_or_else(|| super::layer::invalid("no LGP1 section"))?;
+	fn read(stream: impl FileStream) -> Result<Self> {
+		let (bytes, at) = super::layer::section(stream, b"LGB1", b"LGP1")?;
 
 		// A section states its own header length, and the older files put eight more bytes in it.
 		let size = super::layer::section_size(&bytes, at)?;
-		Ok(Self(LayerGroup::parse(&bytes, at, size)?))
+		Ok(Self(super::layer::section_group(&bytes, at, size)?))
 	}
 }
 
