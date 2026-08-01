@@ -72,7 +72,7 @@ pub enum InstanceKind {
 	RestBonusRange = 50,
 	QuestMarker = 51,
 	Timeline = 52,
-	ObjectBehaviorSet = 53,
+	ObjectBehaviourSet = 53,
 	Movie = 54,
 	ScenarioExd = 55,
 	ScenarioText = 56,

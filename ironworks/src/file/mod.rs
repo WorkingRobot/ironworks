@@ -20,10 +20,16 @@ pub mod atch;
 pub mod cmp;
 #[cfg(feature = "eid")]
 pub mod eid;
+#[cfg(feature = "envb")]
+pub mod envb;
+#[cfg(any(feature = "envb", feature = "essb", feature = "obsb"))]
+pub mod envs;
 #[cfg(feature = "eqdp")]
 pub mod eqdp;
 #[cfg(feature = "eqp")]
 pub mod eqp;
+#[cfg(feature = "essb")]
+pub mod essb;
 #[cfg(feature = "est")]
 pub mod est;
 #[cfg(feature = "evp")]
@@ -60,6 +66,8 @@ pub mod lvb;
 pub mod mdl;
 #[cfg(feature = "mtrl")]
 pub mod mtrl;
+#[cfg(feature = "obsb")]
+pub mod obsb;
 #[cfg(feature = "pap")]
 pub mod pap;
 #[cfg(feature = "patch")]
