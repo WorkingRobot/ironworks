@@ -67,6 +67,7 @@ tera = []
 tex = ["dep:num_enum"]
 tmb = []
 uld = []
+uwb = []
 
 [dependencies]
 binrw = "0.15.0"

@@ -90,5 +90,7 @@ pub mod tex;
 pub mod tmb;
 #[cfg(feature = "uld")]
 pub mod uld;
+#[cfg(feature = "uwb")]
+pub mod uwb;
 
 pub use file::File;
