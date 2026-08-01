@@ -220,6 +220,8 @@ pub enum VertexFormat {
 	ByteFloat4 = 8,
 	Half2 = 13,
 	Half4 = 14,
+	/// Eight bytes, carrying a blend weight or bone index each.
+	UByte8 = 17,
 }
 
 /// The kind of data represented by a vertex attribute.

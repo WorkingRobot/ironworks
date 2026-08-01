@@ -6,7 +6,7 @@ use std::{
 use binrw::{BinRead, NullString, VecArgs};
 use half::f16;
 
-use crate::error::Result;
+use crate::error::{Error, ErrorValue, Result};
 
 use super::{model::Lod, structs};
 
@@ -53,7 +53,7 @@ impl Mesh {
 		let indices = <Vec<u16>>::read_le_args(
 			&mut cursor,
 			VecArgs {
-				count: mesh.index_count.try_into().unwrap(),
+				count: mesh.index_count as usize,
 				inner: (),
 			},
 		)?;
@@ -107,7 +107,13 @@ impl Mesh {
 					K::ByteFloat4 => V::Vector4(read_values(offsets, cursor, bfloat4)?),
 					K::Half2 => V::Vector2(read_values(offsets, cursor, half2)?),
 					K::Half4 => V::Vector4(read_values(offsets, cursor, half4)?),
-					other => todo!("Vertex kind: {other:?}"),
+					K::UByte8 => V::Bytes8(read_values(offsets, cursor, ubyte8)?),
+					K::None => {
+						return Err(Error::Invalid(
+							ErrorValue::Other("model vertex element".into()),
+							"element declares no format".into(),
+						));
+					}
 				};
 
 				Ok(VertexAttribute {
@@ -173,6 +179,10 @@ fn half2(reader: &mut (impl Read + Seek)) -> Result<[f32; 2]> {
 	])
 }
 
+fn ubyte8(reader: &mut (impl Read + Seek)) -> Result<[u8; 8]> {
+	Ok(<[u8; 8]>::read(reader)?)
+}
+
 fn half4(reader: &mut (impl Read + Seek)) -> Result<[f32; 4]> {
 	Ok([
 		f16::from_bits(u16::read_le(reader)?).to_f32(),
@@ -198,6 +208,7 @@ pub struct VertexAttribute {
 #[derive(Debug)]
 pub enum VertexValues {
 	Uint(Vec<u32>),
+	Bytes8(Vec<[u8; 8]>),
 	Vector2(Vec<[f32; 2]>),
 	Vector3(Vec<[f32; 3]>),
 	Vector4(Vec<[f32; 4]>),
