@@ -90,18 +90,20 @@ pub struct File {
 
 	model_clip_out_distance: f32,
 	shadow_clip_out_distance: f32,
-	unknown4: u16,
+	#[br(temp)]
+	culling_grid_count: u16,
 	#[br(temp)]
 	terrain_shadow_submesh_count: u16,
-	unknown5: u8,
+	flags3: u8,
 	bg_change_material_index: u8,
 	bg_crest_change_material_index: u8,
-	unknown6: u8,
+	#[br(temp)]
+	neck_morph_count: u8,
 	#[br(temp)]
 	bone_table_array_count_total: u16,
 	unknown8: u16,
-	#[br(pad_after = 6)]
-	unknown9: u16,
+	#[br(pad_after = 6, temp)]
+	face_data_count: u16,
 
 	// padding: [u8; 6],
 	#[br(count = element_id_count)]
@@ -152,6 +154,12 @@ pub struct File {
 	#[br(count = submesh_bone_map_size / 2)]
 	submesh_bone_map: Vec<u16>,
 
+	#[br(count = neck_morph_count)]
+	neck_morphs: Vec<NeckMorph>,
+
+	#[br(count = face_data_count)]
+	face_data: Vec<FaceVertex>,
+
 	// lmao what
 	#[br(temp)]
 	padding_size: u8,
@@ -162,6 +170,9 @@ pub struct File {
 	vertical_fog_bounding_boxes: BoundingBox,
 	#[br(count = bone_count)]
 	bone_bounding_boxes: Vec<BoundingBox>,
+
+	#[br(count = culling_grid_count)]
+	culling_grid: Vec<BoundingBox>,
 
 	// ??????
 	// this is going to be a collection of smaller buffers - i'll probably be better off with manual accessors to fetch specific parts of it
@@ -419,6 +430,24 @@ enum BoneTable {
 #[binread]
 #[br(little)]
 #[derive(Debug)]
+struct NeckMorph {
+	position: [f32; 3],
+	unknown1: u32,
+	normal: [f32; 3],
+	bone_index: [u8; 4],
+}
+
+#[binread]
+#[br(little)]
+#[derive(Debug)]
+struct FaceVertex {
+	position: [f32; 3],
+	unknown1: u32,
+}
+
+#[binread]
+#[br(little)]
+#[derive(Debug)]
 struct Shape {
 	string_offset: u32,
 	shape_mesh_start_index: [u16; MAX_LODS],
@@ -449,6 +478,7 @@ struct BoundingBox {
 	min: [f32; 4],
 	max: [f32; 4],
 }
+
 #[cfg(test)]
 mod test {
 	use std::io::Cursor;
@@ -457,15 +487,18 @@ mod test {
 
 	use super::{File, VERSION_5};
 
-	/// A minimal model. The vertex offset it declares is the length of everything laid out
-	/// before the vertex buffer, so reading it back checks the reader consumes exactly what
-	/// was written.
+	/// A model carrying one of each section the header's counts can turn on. The vertex offset
+	/// it declares is the length of everything laid out before the vertex buffer, so reading it
+	/// back checks the reader consumes exactly the sections written.
 	#[derive(Default)]
 	struct Model {
 		version: u32,
 		flags2: u8,
 		/// Bone index counts, one per table.
 		bone_tables: Vec<u16>,
+		neck_morph_count: u8,
+		face_data_count: u16,
+		culling_grid_count: u16,
 	}
 
 	impl Model {
@@ -510,11 +543,12 @@ mod test {
 			body.extend([0, self.flags2]);
 			body.extend(0.0f32.to_le_bytes());
 			body.extend(0.0f32.to_le_bytes());
-			body.extend([0; 4]);
-			body.extend([0; 4]);
+			body.extend(self.culling_grid_count.to_le_bytes());
+			body.extend(0u16.to_le_bytes());
+			body.extend([0, 0, 0, self.neck_morph_count]);
 			body.extend(table_indices.to_le_bytes());
 			body.extend(0u16.to_le_bytes());
-			body.extend(0u16.to_le_bytes());
+			body.extend(self.face_data_count.to_le_bytes());
 			body.extend([0; 6]);
 
 			body.extend([0; 3 * 60]);
@@ -542,10 +576,13 @@ mod test {
 
 			// Submesh bone map, empty.
 			body.extend(0u32.to_le_bytes());
+			body.extend(vec![0; usize::from(self.neck_morph_count) * 32]);
+			body.extend(vec![0; usize::from(self.face_data_count) * 16]);
 			// Padding, which the reader takes from the byte before it.
 			body.push(4);
 			body.extend([0; 4]);
 			body.extend(vec![0; (4 + usize::from(bone_count)) * 32]);
+			body.extend(vec![0; usize::from(self.culling_grid_count) * 32]);
 
 			let mut bytes = Vec::new();
 			bytes.extend(self.version.to_le_bytes());
@@ -628,5 +665,23 @@ mod test {
 			ends_at_the_vertex_buffer(&model);
 			assert!(model.read().extra_lods.is_none());
 		}
+	}
+
+	#[test]
+	fn reads_the_sections_trailing_the_submesh_bone_map() {
+		let model = Model {
+			version: 0x0100_0006,
+			bone_tables: vec![4],
+			neck_morph_count: 10,
+			face_data_count: 6489,
+			culling_grid_count: 5,
+			..Default::default()
+		};
+		ends_at_the_vertex_buffer(&model);
+
+		let file = model.read();
+		assert_eq!(file.neck_morphs.len(), 10);
+		assert_eq!(file.face_data.len(), 6489);
+		assert_eq!(file.culling_grid.len(), 5);
 	}
 }
