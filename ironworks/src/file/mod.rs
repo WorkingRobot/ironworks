@@ -50,6 +50,8 @@ pub mod hwc;
 pub mod imc;
 #[cfg(feature = "lgb")]
 pub mod lgb;
+#[cfg(feature = "luab")]
+pub mod luab;
 #[cfg(feature = "mdl")]
 pub mod mdl;
 #[cfg(feature = "mtrl")]
