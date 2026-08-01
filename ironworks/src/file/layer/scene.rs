@@ -75,17 +75,26 @@ impl Scene {
 		let offsets = (0..FIELDS)
 			.map(|slot| i32_at(bytes, body + slot * 4))
 			.collect::<Result<Vec<_>>>()?;
-		let count = |declared: i32| {
-			usize::try_from(declared)
-				.map_err(|_| invalid(format!("a scene at {at:#x} declaring {declared} entries")))
+		// Rejected where the bytes behind the table cannot hold that many: collecting a range
+		// reserves the whole count before the first read fails.
+		let count = |declared: i32, table: usize, stride: usize| {
+			let count = usize::try_from(declared)
+				.map_err(|_| invalid(format!("a scene at {at:#x} declaring {declared} entries")))?;
+			let room = bytes.len().saturating_sub(table) / stride;
+			match count <= room {
+				true => Ok(count),
+				false => Err(invalid(format!(
+					"a scene at {at:#x} declaring {count} entries in room for {room}"
+				))),
+			}
 		};
 
-		let heaps = (0..count(offsets[1])?)
+		let heaps = (0..count(offsets[1], seek(body, offsets[0])?, 16)?)
 			.map(|index| Ok(seek(body, offsets[0])? + index * 16))
 			.collect::<Result<Vec<_>>>()?;
 
 		let table = seek(body, offsets[5])?;
-		let layer_group_paths = (0..count(offsets[6])?)
+		let layer_group_paths = (0..count(offsets[6], table, size_of::<i32>())?)
 			.map(|index| {
 				Ok(string(
 					bytes,
@@ -102,7 +111,7 @@ impl Scene {
 			))
 		};
 		let list = seek(general, i32_at(bytes, general + 8)?)?;
-		let environments = (0..count(i32_at(bytes, general + 12)?)?)
+		let environments = (0..count(i32_at(bytes, general + 12)?, list, ENVIRONMENT)?)
 			.map(|index| Environment::parse(bytes, list + index * ENVIRONMENT))
 			.collect::<Result<Vec<_>>>()?;
 

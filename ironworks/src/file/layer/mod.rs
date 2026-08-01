@@ -179,14 +179,23 @@ struct GroupPlan {
 	layers: Vec<LayerPlan>,
 }
 
+/// A count the file states, rejected where the offset table behind it cannot hold that many:
+/// collecting a range reserves the whole count before the first read fails.
+fn entries(declared: i32, table: usize, bytes: &[u8]) -> Result<usize> {
+	let count = usize::try_from(declared).map_err(|_| invalid(format!("a count of {declared}")))?;
+	let room = bytes.len().saturating_sub(table) / size_of::<i32>();
+	match count <= room {
+		true => Ok(count),
+		false => Err(invalid(format!("a count of {count} in {room} entries"))),
+	}
+}
+
 impl GroupPlan {
 	fn parse(bytes: &[u8], heap: usize) -> Result<Self> {
 		let id = i32_at(bytes, heap)?;
 		let name = string(bytes, seek(heap, i32_at(bytes, heap + 4)?)?);
 		let table = seek(heap, i32_at(bytes, heap + 8)?)?;
-		let count = i32_at(bytes, heap + 12)?;
-		let count = usize::try_from(count)
-			.map_err(|_| invalid(format!("group at {heap:#x} declares {count} layers")))?;
+		let count = entries(i32_at(bytes, heap + 12)?, table, bytes)?;
 
 		let layers = (0..count)
 			.map(|index| LayerPlan::parse(bytes, seek(table, i32_at(bytes, table + index * 4)?)?))
@@ -240,12 +249,7 @@ impl LayerPlan {
 	fn parse(bytes: &[u8], at: usize) -> Result<Self> {
 		let header = Self::header(bytes, at)?;
 		let table = seek(at, header.instance_table)?;
-		let count = usize::try_from(header.instance_count).map_err(|_| {
-			invalid(format!(
-				"layer at {at:#x} declares {} instances",
-				header.instance_count
-			))
-		})?;
+		let count = entries(header.instance_count, table, bytes)?;
 
 		let instances = (0..count)
 			.map(|index| seek(table, i32_at(bytes, table + index * 4)?))

@@ -366,8 +366,14 @@ fn seek_to(bytes: &[u8], at: usize) -> Result<Cursor<&[u8]>> {
 		.ok_or_else(|| invalid(format!("offset {at:#x} is past the end of the file")))
 }
 
-fn count(declared: i32) -> Result<usize> {
-	usize::try_from(declared).map_err(|_| invalid(format!("a count of {declared}")))
+/// A count the file states, rejected where the bytes behind it cannot hold that many: collecting a
+/// range reserves the whole count before the first read fails.
+fn count(declared: i32, stride: usize, rest: usize) -> Result<usize> {
+	let count = usize::try_from(declared).map_err(|_| invalid(format!("a count of {declared}")))?;
+	match count.checked_mul(stride).is_some_and(|size| size <= rest) {
+		true => Ok(count),
+		false => Err(invalid(format!("a count of {count} in {rest} bytes"))),
+	}
 }
 
 impl BgPart {
@@ -774,7 +780,7 @@ impl Sound {
 			no_far_clip: parameters.no_far_clip,
 			point_selection: parameters.point_selection,
 			binary: bytes
-				.get(binary..binary + count(parameters.binary_size)?)
+				.get(binary..binary + count(parameters.binary_size, 1, bytes.len())?)
 				.unwrap_or_default()
 				.to_vec(),
 		})
@@ -968,7 +974,11 @@ impl PopRange {
 		Ok(Self {
 			kind: fields.kind,
 			inner_radius_ratio: fields.inner_radius_ratio,
-			positions: (0..count(fields.position_count)?)
+			positions: (0..count(
+				fields.position_count,
+				size_of::<[f32; 3]>(),
+				positions.get_ref().len(),
+			)?)
 				.map(|_| Ok(<[f32; 3]>::read_le(&mut positions)?))
 				.collect::<Result<Vec<_>>>()?,
 		})
@@ -1196,6 +1206,9 @@ pub struct PathPoint {
 	select: bool,
 }
 
+/// Bytes one [`PathPoint`] takes on disk.
+const PATH_POINT: usize = 16;
+
 /// A route through the zone, which a [`SharedGroup`] can be bound to.
 #[derive(Debug, Getters)]
 pub struct ClientPath {
@@ -1209,7 +1222,7 @@ impl ClientPath {
 		let control_point_count = i32::read_le(cursor)?;
 		let mut points = seek_to(bytes, seek(at, control_points)?)?;
 		Ok(Self {
-			control_points: (0..count(control_point_count)?)
+			control_points: (0..count(control_point_count, PATH_POINT, points.get_ref().len())?)
 				.map(|_| Ok(PathPoint::read(&mut points)?))
 				.collect::<Result<Vec<_>>>()?,
 		})
