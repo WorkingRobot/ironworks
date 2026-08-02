@@ -9,5 +9,5 @@ pub use {
 	container::ModelContainer,
 	mesh::{Mesh, VertexAttribute, VertexValues},
 	model::{Lod, MeshKind, Model},
-	structs::VertexAttributeKind,
+	structs::{VertexAttributeKind, VertexFormat},
 };

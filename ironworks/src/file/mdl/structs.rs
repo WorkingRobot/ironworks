@@ -230,7 +230,7 @@ pub struct VertexElement {
 
 #[binread]
 #[br(repr = u8)]
-#[derive(Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VertexFormat {
 	None = 0,
 	Single3 = 2,

@@ -132,6 +132,7 @@ impl Mesh {
 
 				Ok(VertexAttribute {
 					kind: element.attribute,
+					format: element.format,
 					usage_index: element.usage_index,
 					values,
 				})
@@ -214,6 +215,8 @@ pub struct VertexAttribute {
 	// todo i'm really not convinced on the name here
 	/// The kind of data represented by this attribute.
 	pub kind: structs::VertexAttributeKind,
+	/// How the values were stored, which decides whether they arrived signed.
+	pub format: structs::VertexFormat,
 	/// Distinguishes attributes sharing a kind, such as a mesh's second UV set.
 	pub usage_index: u8,
 	/// Attribute data values.
