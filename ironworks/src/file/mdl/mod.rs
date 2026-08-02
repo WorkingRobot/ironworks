@@ -8,6 +8,6 @@ mod structs;
 pub use {
 	container::ModelContainer,
 	mesh::{Mesh, VertexAttribute, VertexValues},
-	model::{Lod, Model},
+	model::{Lod, MeshKind, Model},
 	structs::VertexAttributeKind,
 };

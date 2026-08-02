@@ -46,11 +46,12 @@ impl Model {
 			})
 			.filter(|(_, kinds)| !kinds.is_empty())
 			// Build the final mesh structs.
-			.map(|(mesh_index, _kinds)| Mesh {
+			.map(|(mesh_index, kinds)| Mesh {
 				file: self.file.clone(),
 
 				level: self.level,
 				mesh_index,
+				kinds,
 			})
 			.collect()
 	}
@@ -117,7 +118,9 @@ impl Model {
 	}
 }
 
-#[derive(Clone, Copy, Debug)]
+/// What a mesh is drawn for.
+#[allow(missing_docs)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MeshKind {
 	Standard,
 	Water,

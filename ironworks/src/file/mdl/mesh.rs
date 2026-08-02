@@ -8,7 +8,10 @@ use half::f16;
 
 use crate::error::{Error, ErrorValue, Result};
 
-use super::{model::Lod, structs};
+use super::{
+	model::{Lod, MeshKind},
+	structs,
+};
 
 // TODO: improve the debug output of these things
 /// A single mesh within a model.
@@ -18,11 +21,18 @@ pub struct Mesh {
 
 	pub(super) level: Lod,
 	pub(super) mesh_index: usize,
+	pub(super) kinds: Vec<MeshKind>,
 }
 
 impl Mesh {
 	// TODO: bones
 	// TODO: submeshes
+
+	/// What the model draws this mesh for. A mesh listed in more than one of the lod's ranges
+	/// carries every kind that names it.
+	pub fn kinds(&self) -> &[MeshKind] {
+		&self.kinds
+	}
 
 	// TODO: i'm not sure this should be specific to mesh - the list of materials on the model might be useful in some cases. should i use a ref to the parent model and read off that, rather than the arc of a file?
 	/// Path to the material associated with this mesh.
