@@ -78,8 +78,12 @@ pub struct Entry {
 	/// Key of an instance in one of the zone's layers.
 	instance: u32,
 
-	unknown_a: u32,
-	unknown_b: f32,
+	/// Reaches the part of that instance the entry applies to, an index per level of shared group
+	/// it sits under, filled from the front and zero the rest of the way.
+	members: [u8; 4],
+
+	/// How much of the sky reaches it, over `0.0..=1.0`.
+	visibility: f32,
 }
 
 #[cfg(test)]
@@ -105,8 +109,8 @@ mod test {
 			bytes.extend(vec![0xCC; header_size as usize - 20]);
 			for &instance in *entries {
 				bytes.extend(instance.to_le_bytes());
-				bytes.extend(0u32.to_le_bytes());
-				bytes.extend(1f32.to_le_bytes());
+				bytes.extend([2, 1, 0, 0]);
+				bytes.extend(0.5f32.to_le_bytes());
 			}
 		}
 		bytes
@@ -137,7 +141,10 @@ mod test {
 			[1, 2]
 		);
 		assert!(groups[1].entries().is_empty());
-		assert_eq!(groups[2].entries()[0].unknown_b(), 1.);
+
+		let entry = groups[2].entries()[0];
+		assert_eq!(entry.members(), [2, 1, 0, 0]);
+		assert_eq!(entry.visibility(), 0.5);
 	}
 
 	/// Entries start where the group's header says they do, not at a fixed offset.

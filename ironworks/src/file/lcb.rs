@@ -78,8 +78,9 @@ pub struct Entry {
 	/// Key of an instance in one of the zone's layers.
 	instance: u32,
 
-	/// Key of the light within that instance, where it is a shared group.
-	light: u32,
+	/// Reaches the light inside that instance, an index per level of shared group it sits under,
+	/// filled from the front and zero the rest of the way.
+	members: [u8; 4],
 
 	min: [f32; 3],
 	max: [f32; 3],
@@ -108,7 +109,7 @@ mod test {
 			bytes.extend(vec![0xCC; header_size as usize - 20]);
 			for &instance in *entries {
 				bytes.extend(instance.to_le_bytes());
-				bytes.extend(2u32.to_le_bytes());
+				bytes.extend([2, 1, 0, 0]);
 				bytes.extend((0..3).flat_map(|axis| (-(axis as f32)).to_le_bytes()));
 				bytes.extend((0..3).flat_map(|axis| (axis as f32).to_le_bytes()));
 			}
@@ -143,7 +144,7 @@ mod test {
 		assert!(groups[1].entries().is_empty());
 
 		let entry = groups[2].entries()[0];
-		assert_eq!(entry.light(), 2);
+		assert_eq!(entry.members(), [2, 1, 0, 0]);
 		assert_eq!(entry.min(), [-0., -1., -2.]);
 		assert_eq!(entry.max(), [0., 1., 2.]);
 	}
