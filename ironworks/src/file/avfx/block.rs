@@ -221,15 +221,19 @@ fn span(bytes: &[u8], at: usize) -> Result<(std::ops::Range<usize>, usize)> {
 		.ok_or_else(|| invalid(format!("block at {at:#x} runs past the end of its parent")))?;
 	let size = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
 
+	// A size is read before anything vouches for it, and `tiles` reads one out of arbitrary bytes
+	// on purpose, so sizes that overrun a 32-bit usize arrive in the ordinary course of parsing.
 	let start = at + 8;
-	let end = start + size;
-	let next = start + size.next_multiple_of(4);
-	match next <= bytes.len() {
-		true => Ok((start..end, next)),
-		false => Err(invalid(format!(
-			"block at {at:#x} declares {size} bytes, more than its parent holds"
-		))),
-	}
+	let next = size
+		.checked_next_multiple_of(4)
+		.and_then(|size| start.checked_add(size))
+		.filter(|&next| next <= bytes.len())
+		.ok_or_else(|| {
+			invalid(format!(
+				"block at {at:#x} declares {size} bytes, more than its parent holds"
+			))
+		})?;
+	Ok((start..start + size, next))
 }
 
 /// Whether a payload divides exactly into well-formed blocks.

@@ -540,6 +540,18 @@ mod test {
 		));
 	}
 
+	/// Whether a payload nests is decided by reading a size out of it, so any byte pattern can name
+	/// one that no pointer could hold.
+	#[test]
+	fn block_declaring_more_than_a_pointer_holds() {
+		let mut bytes = nest("AVFX", &[block("Ver", &integer(1))]);
+		bytes[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+		assert!(matches!(
+			Avfx::read(Cursor::new(bytes)),
+			Err(Error::Invalid(..))
+		));
+	}
+
 	#[test]
 	fn tags_are_written_back_to_front() {
 		let file = read(&[
