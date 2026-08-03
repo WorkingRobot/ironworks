@@ -10,6 +10,9 @@ const FIELDS: usize = 16;
 /// One entry of the environment list the general fields point at.
 const ENVIRONMENT: usize = 24;
 
+/// One entry of the filter list.
+const FILTER: usize = 28;
+
 /// An environment the scene applies over part of itself.
 #[derive(Debug, Getters, CopyGetters)]
 pub struct Environment {
@@ -27,6 +30,20 @@ pub struct Environment {
 	/// The `.essb` the environment is heard through.
 	#[get = "pub"]
 	sound_asset_path: String,
+}
+
+/// A place the scene is used from. Several territories can share one scene, and each names the
+/// layers it turns on through one of these.
+#[derive(Debug, Clone, Copy, CopyGetters)]
+#[get_copy = "pub"]
+pub struct Filter {
+	key: u32,
+
+	/// A row of `TerritoryType`.
+	territory_type: u16,
+
+	/// A row of `ContentFinderCondition`, and zero where the scene is not entered through one.
+	content_finder_condition: u16,
 }
 
 /// Everything an `SCN1` section holds: the layer groups laid out inside the file, the paths of the
@@ -51,6 +68,9 @@ pub struct Scene {
 
 	#[getset(skip)]
 	environments: Vec<Environment>,
+
+	#[getset(skip)]
+	filters: Vec<Filter>,
 }
 
 impl Scene {
@@ -62,6 +82,11 @@ impl Scene {
 	/// The environments the scene applies, in the order it names them.
 	pub fn environments(&self) -> &[Environment] {
 		&self.environments
+	}
+
+	/// The places the scene is used from, in the order it names them.
+	pub fn filters(&self) -> &[Filter] {
+		&self.filters
 	}
 
 	/// Reads the scene whose section header starts at `at`.
@@ -103,6 +128,12 @@ impl Scene {
 			})
 			.collect::<Result<Vec<_>>>()?;
 
+		let list = seek(body, offsets[3])?;
+		let entries = seek(list, i32_at(bytes, list)?)?;
+		let filters = (0..count(i32_at(bytes, list + 4)?, entries, FILTER)?)
+			.map(|index| Filter::parse(bytes, entries + index * FILTER))
+			.collect::<Result<Vec<_>>>()?;
+
 		let general = seek(body, offsets[2])?;
 		let path = |offset| -> Result<String> {
 			Ok(string(
@@ -130,6 +161,18 @@ impl Scene {
 			sky_visibility_path: path(20)?,
 			light_culling_path: path(52)?,
 			environments,
+			filters,
+		})
+	}
+}
+
+impl Filter {
+	fn parse(bytes: &[u8], at: usize) -> Result<Self> {
+		let ids = i32_at(bytes, at + 16)? as u32;
+		Ok(Self {
+			key: i32_at(bytes, at + 4)? as u32,
+			territory_type: ids as u16,
+			content_finder_condition: (ids >> 16) as u16,
 		})
 	}
 }
