@@ -30,6 +30,7 @@ zipatch = ["patch", "sqpack"]
 # File types
 amb = []
 atch = []
+avfx = ["dep:half"]
 cmp = []
 eid = []
 eqdp = ["dep:modular-bitfield"]

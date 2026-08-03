@@ -16,6 +16,8 @@ mod shader;
 pub mod amb;
 #[cfg(feature = "atch")]
 pub mod atch;
+#[cfg(feature = "avfx")]
+pub mod avfx;
 #[cfg(feature = "cmp")]
 pub mod cmp;
 #[cfg(feature = "eid")]
