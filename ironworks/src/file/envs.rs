@@ -2,6 +2,10 @@
 //!
 //! `.envb`, `.obsb` and `.essb` each wrap one `ENVS` section, which holds a timeline per weather.
 //! A timeline is split into sets, each animating one thing over the day from its own keyframes.
+//!
+//! What a set animates decides how its keyframes are laid out. Those layouts, and the names of
+//! everything inside them, come from pmgr's `env.hexpat`, which is the only place they are written
+//! down.
 
 use getset::{CopyGetters, Getters};
 
@@ -19,11 +23,11 @@ const WEATHER: usize = 16;
 /// Bytes one set takes.
 const SET: usize = 12;
 
-/// Switches the section ends with.
-const OPTIONS: usize = 12;
-
 /// Marks the fields a keyframe grew, written after the ones it already had.
 const EXTENDED: u32 = u32::from_le_bytes(*b"007V");
+
+/// Bytes the marker itself takes, ahead of the fields it introduces.
+const MARKER: usize = 4;
 
 fn invalid(reason: impl Into<String>) -> Error {
 	Error::Invalid(ErrorValue::Other("environment set".into()), reason.into())
@@ -39,6 +43,21 @@ fn u32_at(bytes: &[u8], at: usize) -> Result<u32> {
 
 fn f32_at(bytes: &[u8], at: usize) -> Result<f32> {
 	u32_at(bytes, at).map(f32::from_bits)
+}
+
+fn byte_at(bytes: &[u8], at: usize) -> Result<u8> {
+	bytes
+		.get(at)
+		.copied()
+		.ok_or_else(|| invalid(format!("offset {at:#x} is past the end of the file")))
+}
+
+fn u16_at(bytes: &[u8], at: usize) -> Result<u16> {
+	bytes
+		.get(at..at + 2)
+		.and_then(|raw| raw.try_into().ok())
+		.map(u16::from_le_bytes)
+		.ok_or_else(|| invalid(format!("offset {at:#x} is past the end of the file")))
 }
 
 /// Where the offset at `field` reaches, which the format writes signed from `base` and may point
@@ -80,9 +99,9 @@ pub struct Environments {
 	#[get_copy = "pub"]
 	version: u32,
 
-	/// Twelve switches, which only `.obsb` sets and none of which are identified.
+	/// Twelve switches, named by [`OPTIONS`] and set only by `.obsb`.
 	#[get_copy = "pub"]
-	options: [bool; OPTIONS],
+	options: [bool; OPTIONS.len()],
 
 	#[getset(skip)]
 	weathers: Vec<Weather>,
@@ -94,6 +113,23 @@ impl Environments {
 		&self.weathers
 	}
 }
+
+/// What each of an [`Environments`] switch turns on. All of them steer the oscillator an
+/// `ObjectOscillator` set drives, or what it is applied to.
+pub const OPTIONS: [&str; 12] = [
+	"Random oscillator waveform",
+	"Visibility oscillation",
+	"Rotation oscillation",
+	"Transform rate",
+	"Modulate RGB colour",
+	"Modulate first colour",
+	"Modulate RGBA colour",
+	"Oscillator sync",
+	"Multiply tint",
+	"First colour over white",
+	"Modulate second colour",
+	"Second colour over white",
+];
 
 /// One weather's worth of settings.
 #[derive(Debug, Getters, CopyGetters)]
@@ -107,10 +143,10 @@ pub struct Weather {
 	length: f32,
 
 	#[get_copy = "pub"]
-	unknown_a: u32,
+	parameter: u32,
 
 	#[get_copy = "pub"]
-	unknown_b: f32,
+	weight: f32,
 
 	/// Two assets the weather names, which almost every file the game ships leaves empty.
 	#[get = "pub"]
@@ -134,8 +170,8 @@ impl Weather {
 		Ok(Self {
 			id: u32_at(bytes, at + 8)?,
 			length: f32_at(bytes, footer)?,
-			unknown_a: u32_at(bytes, footer + 4)?,
-			unknown_b: f32_at(bytes, footer + 8)?,
+			parameter: u32_at(bytes, footer + 4)?,
+			weight: f32_at(bytes, footer + 8)?,
 			paths: [
 				seek(bytes, footer, footer + 12)?,
 				seek(bytes, footer, footer + 16)?,
@@ -165,6 +201,11 @@ impl Set {
 		&self.keyframes
 	}
 
+	/// What the set animates, spelled out.
+	pub fn name(&self) -> Option<&'static str> {
+		name(self.kind)
+	}
+
 	fn parse(bytes: &[u8], at: usize) -> Result<Self> {
 		let kind = u32_at(bytes, at + 8)?;
 		let layout = layout(kind).ok_or_else(|| invalid(format!("unknown kind {kind}")))?;
@@ -182,73 +223,147 @@ impl Set {
 	}
 }
 
+/// What a set of each kind animates.
+fn name(kind: u32) -> Option<&'static str> {
+	Some(match kind {
+		0 => "Global lighting",
+		1 => "Fake specular",
+		2 => "Cloud",
+		3 => "Rain",
+		4 => "Snow",
+		5 => "Dust",
+		6 => "Wind",
+		7 => "Light shaft",
+		8 => "Wetness",
+		9 => "Tone mapping",
+		10 => "Colour filter",
+		11 => "Effect",
+		12 => "Starfield",
+		13 => "Vertical fog",
+		20 => "Ambient sound paths",
+		21 => "Ambient sound flags",
+		29 => "Object visibility",
+		30 => "Object transform",
+		31 => "Object oscillator",
+		32 => "Object rotation",
+		33 => "Object RGB colour",
+		34 => "Object RGB colour pair",
+		35 => "Object RGBA colour",
+		_ => return None,
+	})
+}
+
 /// One point on a set's timeline.
-#[derive(Debug, Getters, CopyGetters)]
+#[derive(Debug, CopyGetters)]
 pub struct Keyframe {
 	/// Seconds since midnight.
 	#[get_copy = "pub"]
 	time: f32,
 
-	/// The colours the keyframe reaches, in the order it names them.
-	#[get = "pub"]
-	colours: Vec<Colour>,
-
-	/// The assets the keyframe names, which `.envb` uses for effects and `.essb` for sound.
-	#[get = "pub"]
-	paths: Vec<String>,
-
-	/// The rest of the keyframe, past its time. What it holds follows the kind of its set, none of
-	/// it is identified, and the offsets reaching the colours and paths sit inside it.
-	#[get = "pub"]
-	unknown: Vec<u8>,
+	#[getset(skip)]
+	fields: Vec<(&'static str, Value)>,
 }
 
 impl Keyframe {
+	/// What the keyframe sets, named and in the order the format writes them. Which fields a
+	/// keyframe carries follows the kind of its set.
+	pub fn fields(&self) -> &[(&'static str, Value)] {
+		&self.fields
+	}
+
+	/// The colours the keyframe reaches, in the order it names them.
+	pub fn colours(&self) -> impl Iterator<Item = Colour> {
+		self.fields.iter().filter_map(|(_, value)| match value {
+			Value::Colour(colour) => Some(*colour),
+			_ => None,
+		})
+	}
+
+	/// The assets the keyframe names, which `.envb` uses for effects and `.essb` for sound.
+	pub fn paths(&self) -> impl Iterator<Item = &str> {
+		self.fields.iter().filter_map(|(_, value)| match value {
+			Value::Path(path) => Some(path.as_str()),
+			_ => None,
+		})
+	}
+
 	fn parse(bytes: &[u8], at: usize, layout: &Layout) -> Result<Self> {
-		let extended = layout
-			.extension
-			.filter(|_| u32_at(bytes, at + layout.size).is_ok_and(|magic| magic == EXTENDED));
+		let mut fields = Vec::new();
+		values(bytes, at, at + 4, layout.fields, layout.paths, &mut fields)?;
 
-		let colours = layout
-			.colours
-			.iter()
-			.map(|&field| at + field)
-			.chain(
-				extended
-					.into_iter()
-					.flat_map(|(_, colours)| colours.iter().map(|&field| at + layout.size + field)),
-			)
-			.map(|field| Colour::parse(bytes, seek(bytes, at, field)?))
-			.collect::<Result<_>>()?;
-
-		let paths = match layout.paths {
-			false => Vec::new(),
-			true => {
-				let table = seek(bytes, at, at + 4)?;
-				let count = entries(bytes, u32_at(bytes, at + 8)?, table, size_of::<i32>())?;
-				(0..count)
-					.map(|index| Ok(string(bytes, seek(bytes, table, table + index * 4)?)))
-					.collect::<Result<_>>()?
-			}
-		};
-
-		let end = at + layout.size + extended.map_or(0, |(size, _)| size);
-		let unknown = bytes
-			.get(at + 4..end)
-			.ok_or_else(|| invalid(format!("keyframe at {at:#x} runs past the end of the file")))?
-			.to_vec();
+		let extension = at + layout.size();
+		if !layout.extension.is_empty() && u32_at(bytes, extension).is_ok_and(|it| it == EXTENDED) {
+			values(
+				bytes,
+				at,
+				extension + MARKER,
+				layout.extension,
+				&[],
+				&mut fields,
+			)?;
+		}
 
 		Ok(Self {
 			time: f32_at(bytes, at)?,
-			colours,
-			paths,
-			unknown,
+			fields,
 		})
 	}
 }
 
+/// Reads `fields` starting at `from`, resolving colour and path offsets against `base`, which is
+/// the start of the keyframe however far into it the offset itself sits.
+fn values(
+	bytes: &[u8],
+	base: usize,
+	from: usize,
+	fields: &[Field],
+	paths: &[&'static str],
+	into: &mut Vec<(&'static str, Value)>,
+) -> Result<()> {
+	let mut at = from;
+	for field in fields {
+		match field {
+			Field::Float(name) => into.push((name, Value::Float(f32_at(bytes, at)?))),
+			Field::Unsigned(name) => into.push((name, Value::Unsigned(u32_at(bytes, at)?))),
+			Field::Short(name) => {
+				into.push((name, Value::Unsigned(u16_at(bytes, at)?.into())));
+			}
+			Field::Byte(name) => into.push((name, Value::Unsigned(byte_at(bytes, at)?.into()))),
+			Field::Flag(name) => into.push((name, Value::Flag(byte_at(bytes, at)? != 0))),
+			Field::Colour(name) => {
+				let colour = Colour::parse(bytes, seek(bytes, base, at)?)?;
+				into.push((name, Value::Colour(colour)));
+			}
+			Field::Paths => {
+				let table = seek(bytes, base, at)?;
+				let count = entries(bytes, u32_at(bytes, at + 4)?, table, size_of::<i32>())?;
+				for index in 0..count {
+					let path = string(bytes, seek(bytes, table, table + index * 4)?);
+					into.push((
+						paths.get(index).copied().unwrap_or_default(),
+						Value::Path(path),
+					));
+				}
+			}
+			Field::Padding(_) => (),
+		}
+		at += field.size();
+	}
+	Ok(())
+}
+
+/// What one field of a keyframe holds.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+	Float(f32),
+	Unsigned(u32),
+	Flag(bool),
+	Colour(Colour),
+	Path(String),
+}
+
 /// A colour and the intensity it is scaled by.
-#[derive(Debug, Clone, Copy, CopyGetters)]
+#[derive(Debug, Clone, Copy, PartialEq, CopyGetters)]
 #[get_copy = "pub"]
 pub struct Colour {
 	red: u8,
@@ -271,37 +386,171 @@ impl Colour {
 	}
 }
 
-/// How the keyframes of one kind are laid out: the bytes one takes, where inside it the colour
-/// offsets sit, whether it names assets, and what the fields it grew add.
-struct Layout {
-	size: usize,
-	colours: &'static [usize],
-	paths: bool,
-	extension: Option<(usize, &'static [usize])>,
+/// One field of a keyframe: what it is called and how it is read.
+enum Field {
+	Float(&'static str),
+	Unsigned(&'static str),
+	Short(&'static str),
+	Byte(&'static str),
+	Flag(&'static str),
+
+	/// A signed offset from the start of the keyframe, reaching a colour.
+	Colour(&'static str),
+
+	/// The offset and count of the keyframe's path table, whose entries its layout names.
+	Paths,
+
+	/// Bytes written only to align what follows.
+	Padding(usize),
 }
+
+impl Field {
+	fn size(&self) -> usize {
+		match self {
+			Self::Float(_) | Self::Unsigned(_) | Self::Colour(_) => 4,
+			Self::Short(_) => 2,
+			Self::Byte(_) | Self::Flag(_) => 1,
+			Self::Paths => 8,
+			Self::Padding(size) => *size,
+		}
+	}
+}
+
+/// How the keyframes of one kind are laid out: the fields past the time they open with, the names
+/// of the assets their path table holds, and the fields they grew.
+struct Layout {
+	fields: &'static [Field],
+	paths: &'static [&'static str],
+	extension: &'static [Field],
+}
+
+impl Layout {
+	/// Bytes a keyframe takes before the fields it grew, the time included.
+	fn size(&self) -> usize {
+		4 + self.fields.iter().map(Field::size).sum::<usize>()
+	}
+}
+
+use Field::{Byte, Colour as Rgba, Flag, Float, Padding, Paths, Short, Unsigned};
 
 #[rustfmt::skip]
 fn layout(kind: u32) -> Option<Layout> {
-	Some(match kind {
-		0 => Layout { size: 44, colours: &[4, 20, 24], paths: false, extension: Some((8, &[])) },
-		1 => Layout { size: 32, colours: &[4, 8, 12], paths: false, extension: None },
-		2 => Layout { size: 28, colours: &[20, 24], paths: false, extension: None },
-		3..=5 => Layout { size: 40, colours: &[32], paths: false, extension: None },
-		6 => Layout { size: 16, colours: &[], paths: false, extension: Some((28, &[])) },
-		7 => Layout { size: 24, colours: &[8, 12], paths: false, extension: None },
-		8 => Layout { size: 20, colours: &[], paths: false, extension: None },
-		9 => Layout { size: 28, colours: &[], paths: false, extension: None },
-		10 => Layout { size: 52, colours: &[20], paths: false, extension: Some((24, &[20])) },
-		11 => Layout { size: 48, colours: &[12, 16, 28, 32], paths: true, extension: None },
-		12 => Layout { size: 32, colours: &[20], paths: false, extension: None },
-		13 => Layout { size: 32, colours: &[4], paths: false, extension: Some((56, &[48])) },
-		20 => Layout { size: 12, colours: &[], paths: true, extension: None },
-		21 | 29 | 30 | 32 => Layout { size: 8, colours: &[], paths: false, extension: None },
-		31 => Layout { size: 12, colours: &[], paths: false, extension: None },
-		33 | 35 => Layout { size: 8, colours: &[4], paths: false, extension: None },
-		34 => Layout { size: 12, colours: &[4, 8], paths: false, extension: None },
+	let (fields, paths, extension): (&[Field], &[&str], &[Field]) = match kind {
+		0 => (&[
+			Rgba("sunlight_color"), Float("ambient_light_scale"), Float("ambient_light_saturation"),
+			Float("ambient_attenuation"), Rgba("extra_ambient_color"), Rgba("moonlight_color"),
+			Float("extra_ambient_color_weight"), Float("extra_param"), Float("parameter_0"),
+			Float("parameter_1"),
+		], &[], &[Float("hue_shift")]),
+
+		1 => (&[
+			Rgba("color_0"), Rgba("color_1"), Rgba("color_2"), Float("elevation_0_degrees"),
+			Float("elevation_1_degrees"), Float("elevation_2_degrees"), Float("rotation_degrees"),
+		], &[], &[]),
+
+		2 => (&[
+			Unsigned("main_cloud"), Unsigned("alt_cloud"), Float("main_intensity"),
+			Float("alt_intensity"), Rgba("diffuse_color"), Rgba("ambient_color"),
+		], &[], &[]),
+
+		3..=5 => (&[
+			Float("density"), Float("weight"), Float("oscillation_spread"),
+			Float("oscillation_frequency"), Float("distance_response_profile"),
+			Float("extra_param"), Float("modulation_rate"), Rgba("color"), Unsigned("flags"),
+		], &[], &[]),
+
+		6 => (&[
+			Float("layer_0_azimuth_degrees"), Float("unknown"), Float("layer_0_max_strength"),
+		], &[], &[
+			Float("layer_1_azimuth_degrees"), Float("layer_0_wavelength"),
+			Float("layer_1_max_strength"), Float("layer_1_wavelength"),
+			Float("layer_0_min_strength"), Float("layer_1_min_strength"),
+		]),
+
+		7 => (&[
+			Unsigned("unknown"), Rgba("color_0"), Rgba("radiance_color"), Float("scale"),
+			Float("some_param"),
+		], &[], &[]),
+
+		8 => (&[
+			Float("unknown"), Float("world_wetness_parameter_1"),
+			Float("world_wetness_parameter_0"), Float("character_wetness"),
+		], &[], &[]),
+
+		9 => (&[
+			Float("adaptation_rate"), Float("adapted_luminance_parameter_w"),
+			Float("adapted_luminance_parameter_x"), Float("adapted_luminance_parameter_y"),
+			Float("tone_map_parameter_y"), Float("tone_map_parameter_x"),
+		], &[], &[]),
+
+		10 => (&[
+			Float("hue"), Float("saturation"), Float("brightness"), Float("contrast"),
+			Rgba("filter_color"), Float("filter_intensity"), Float("sepia"), Float("grayscale"),
+			Float("negative"), Float("lut_input_black_point"), Float("lut_input_white_point"),
+			Flag("alternate_curve_layout"), Padding(3),
+		], &[], &[
+			Float("dark_filter_saturation"), Float("dark_filter_parameter_x"),
+			Float("dark_filter_parameter_y"), Float("dark_filter_tint_amount_and_parameter_z"),
+			Rgba("dark_filter_tint_color"),
+		]),
+
+		11 => (&[
+			Paths, Rgba("background_tint_color"), Rgba("foreground_tint_color"),
+			Byte("foreground_effect_type"), Padding(3), Float("effect_transition_seconds"),
+			Rgba("unknown_rgba_color"), Rgba("thunder_color"), Float("thunder_interval"),
+			Float("background_intensity"), Float("foreground_intensity"),
+		], &["effect_0", "effect_1"], &[]),
+
+		12 => (&[
+			Float("a_intensity"), Float("b_intensity"), Float("c_intensity"), Float("unknown"),
+			Rgba("moon_color"), Float("unknown_2"), Float("procedural_star_intensity"),
+		], &[], &[]),
+
+		13 => (&[
+			Rgba("fog_color"), Float("fog_start_distance"), Float("fog_intensity_0"),
+			Float("fog_fade_distance"), Float("fog_intensity_1"), Float("fog_parameter"),
+			Float("fog_blend"),
+		], &[], &[
+			Float("fog_density_percent"), Float("exp_fog_height"), Float("fog_height_falloff"),
+			Float("start_distance"), Float("fog_min_opacity"), Float("fog_density_2_percent"),
+			Float("exp_fog_height_2_delta"), Float("fog_height_falloff_2"),
+			Float("directional_inscattering_start_distance"),
+			Float("directional_inscattering_color_intensity"),
+			Float("directional_inscattering_exponent"), Rgba("directional_inscattering_color"),
+			Byte("use_height_fog_update"), Padding(3),
+		]),
+
+		// Named by neither the format nor anything that reads it, and written by no file the game
+		// ships.
+		14 => (&[
+			Float("scalar_0"), Float("scalar_1"), Float("scalar_2"), Float("scalar_3"),
+			Float("scalar_4"), Float("scalar_5"), Float("scalar_6"), Float("scalar_7"),
+		], &[], &[]),
+
+		20 => (&[Paths], &[
+			"background_loop", "spot_ambience", "special_spot", "reserved_path",
+			"random_grass_wind",
+		], &[]),
+
+		21 => (&[
+			Flag("ambient_setting_0_enabled"), Flag("ambient_setting_1_enabled"), Padding(2),
+		], &[], &[]),
+
+		29 => (&[
+			Short("transition_duration_centiseconds"), Flag("visible"), Padding(1),
+		], &[], &[]),
+
+		30 | 32 => (&[Float("value")], &[], &[]),
+
+		31 => (&[Float("phase_rate"), Float("amplitude")], &[], &[]),
+
+		33 | 35 => (&[Rgba("color")], &[], &[]),
+
+		34 => (&[Rgba("color_0"), Rgba("color_1")], &[], &[]),
+
 		_ => return None,
-	})
+	};
+	Some(Layout { fields, paths, extension })
 }
 
 /// The environment set a file opening with `magic` holds.
@@ -323,7 +572,7 @@ pub(super) fn read(mut stream: impl FileStream, magic: &[u8; 4]) -> Result<Envir
 
 	let at = seek(&bytes, body, body + 12)?;
 	let switches = bytes
-		.get(at..at + OPTIONS)
+		.get(at..at + OPTIONS.len())
 		.ok_or_else(|| invalid(format!("switches at {at:#x} are past the end of the file")))?;
 
 	Ok(Environments {
@@ -339,7 +588,7 @@ pub(super) fn read(mut stream: impl FileStream, magic: &[u8; 4]) -> Result<Envir
 mod test {
 	use std::io::Cursor;
 
-	use super::read;
+	use super::{Value, layout, read};
 
 	/// Builds a set of `weathers`, each holding one wetness set of one keyframe, with the section
 	/// header the format states rather than one the reader assumes.
@@ -403,12 +652,21 @@ mod test {
 		let sets = weather.sets();
 		assert_eq!(sets.len(), 1);
 		assert_eq!(sets[0].kind(), 8);
+		assert_eq!(sets[0].name(), Some("Wetness"));
 
 		let keyframes = sets[0].keyframes();
 		assert_eq!(keyframes.len(), 1);
 		assert_eq!(keyframes[0].time(), 3600.);
-		assert!(keyframes[0].colours().is_empty());
-		assert_eq!(keyframes[0].unknown().len(), 16);
+		assert_eq!(keyframes[0].colours().count(), 0);
+		assert_eq!(
+			keyframes[0].fields(),
+			[
+				("unknown", Value::Float(0.)),
+				("world_wetness_parameter_1", Value::Float(1.)),
+				("world_wetness_parameter_0", Value::Float(2.)),
+				("character_wetness", Value::Float(3.)),
+			]
+		);
 	}
 
 	/// Every structure is reached by an offset, so nothing may be read on the word of a header
@@ -423,5 +681,97 @@ mod test {
 	#[test]
 	fn rejects_another_format() {
 		assert!(read(Cursor::new(build(b"ESSB", &[1])), b"ENVB").is_err());
+	}
+
+	/// The fields of a kind have to account for every byte of it, since the fields it grew are
+	/// looked for at the end of the ones it started with.
+	#[test]
+	fn every_kind_covers_the_bytes_it_takes() {
+		let sizes = [
+			(0, 44, 8),
+			(1, 32, 0),
+			(2, 28, 0),
+			(3, 40, 0),
+			(4, 40, 0),
+			(5, 40, 0),
+			(6, 16, 28),
+			(7, 24, 0),
+			(8, 20, 0),
+			(9, 28, 0),
+			(10, 52, 24),
+			(11, 48, 0),
+			(12, 32, 0),
+			(13, 32, 56),
+			(14, 36, 0),
+			(20, 12, 0),
+			(21, 8, 0),
+			(29, 8, 0),
+			(30, 8, 0),
+			(31, 12, 0),
+			(32, 8, 0),
+			(33, 8, 0),
+			(34, 12, 0),
+			(35, 8, 0),
+		];
+		for (kind, size, extension) in sizes {
+			let it = layout(kind).unwrap_or_else(|| panic!("no layout for kind {kind}"));
+			assert_eq!(it.size(), size, "size of kind {kind}");
+			let grown = match it.extension.is_empty() {
+				true => 0,
+				false => 4 + it.extension.iter().map(super::Field::size).sum::<usize>(),
+			};
+			assert_eq!(grown, extension, "extension of kind {kind}");
+		}
+	}
+
+	/// Where in a keyframe each of its colour offsets sits. A colour is the one field reached
+	/// through the file rather than read in place, so an offset at the wrong position reads
+	/// whatever the neighbouring field happens to hold.
+	#[test]
+	fn every_colour_offset_sits_where_it_does_in_the_file() {
+		let colours = |fields: &[super::Field], from: usize| {
+			let mut at = from;
+			let mut found = Vec::new();
+			for field in fields {
+				if matches!(field, super::Field::Colour(_)) {
+					found.push(at);
+				}
+				at += field.size();
+			}
+			found
+		};
+
+		for (kind, base, extension) in [
+			(0, &[4, 20, 24][..], &[][..]),
+			(1, &[4, 8, 12], &[]),
+			(2, &[20, 24], &[]),
+			(3, &[32], &[]),
+			(4, &[32], &[]),
+			(5, &[32], &[]),
+			(6, &[], &[]),
+			(7, &[8, 12], &[]),
+			(10, &[20], &[20]),
+			(11, &[12, 16, 28, 32], &[]),
+			(12, &[20], &[]),
+			(13, &[4], &[48]),
+			(33, &[4], &[]),
+			(34, &[4, 8], &[]),
+			(35, &[4], &[]),
+		] {
+			let it = layout(kind).unwrap();
+			assert_eq!(colours(it.fields, 4), base, "colours of kind {kind}");
+			// An offset the fields it grew carry is still measured from the keyframe's own start.
+			let grown = colours(it.extension, it.size() + 4)
+				.iter()
+				.map(|at| at - it.size())
+				.collect::<Vec<_>>();
+			assert_eq!(grown, extension, "grown colours of kind {kind}");
+		}
+	}
+
+	#[test]
+	fn a_kind_the_format_does_not_name() {
+		assert!(layout(15).is_none());
+		assert!(layout(36).is_none());
 	}
 }
