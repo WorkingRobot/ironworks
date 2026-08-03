@@ -26,12 +26,24 @@ pub struct Mesh {
 
 impl Mesh {
 	// TODO: bones
-	// TODO: submeshes
 
 	/// What the model draws this mesh for. A mesh listed in more than one of the lod's ranges
 	/// carries every kind that names it.
 	pub fn kinds(&self) -> &[MeshKind] {
 		&self.kinds
+	}
+
+	/// The runs of [`indices`](Self::indices) the mesh is split into, in the order it lists them.
+	pub fn submeshes(&self) -> Vec<Submesh> {
+		let mesh = &self.file.meshes[self.mesh_index];
+		let first = usize::from(mesh.sub_mesh_index);
+		self.file.submeshes[first..first + usize::from(mesh.sub_mesh_count)]
+			.iter()
+			.map(|submesh| Submesh {
+				start: (submesh.index_offset - mesh.start_index) as usize,
+				count: submesh.index_count as usize,
+			})
+			.collect()
 	}
 
 	// TODO: i'm not sure this should be specific to mesh - the list of materials on the model might be useful in some cases. should i use a ref to the parent model and read off that, rather than the arc of a file?
@@ -206,6 +218,15 @@ fn half4(reader: &mut (impl Read + Seek)) -> Result<[f32; 4]> {
 		f16::from_bits(u16::read_le(reader)?).to_f32(),
 		f16::from_bits(u16::read_le(reader)?).to_f32(),
 	])
+}
+
+/// One part of a mesh, drawn with the rest of it but hideable on its own.
+#[derive(Clone, Copy, Debug)]
+pub struct Submesh {
+	/// Where the part's indices start within its mesh's own.
+	pub start: usize,
+	/// How many indices it covers.
+	pub count: usize,
 }
 
 // todo: public contents? - i mean, it makes sense to an extent.

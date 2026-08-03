@@ -123,7 +123,7 @@ pub struct File {
 	terrain_shadow_meshes: Vec<TerrainShadowMesh>,
 
 	#[br(count = submesh_count)]
-	submeshes: Vec<Submesh>,
+	pub submeshes: Vec<Submesh>,
 
 	#[br(count = terrain_shadow_submesh_count)]
 	terrain_shadow_submeshes: Vec<TerrainShadowSubmesh>,
@@ -364,8 +364,8 @@ pub struct Mesh {
 	#[br(pad_before = 2)]
 	pub index_count: u32,
 	pub material_index: u16,
-	sub_mesh_index: u16,
-	sub_mesh_count: u16,
+	pub sub_mesh_index: u16,
+	pub sub_mesh_count: u16,
 	bone_table_index: u16,
 	pub start_index: u32,
 	// TODO: the 3 here is the no. of streams
@@ -377,9 +377,9 @@ pub struct Mesh {
 #[binread]
 #[br(little)]
 #[derive(Debug)]
-struct Submesh {
-	index_offset: u32,
-	index_count: u32,
+pub struct Submesh {
+	pub index_offset: u32,
+	pub index_count: u32,
 	attribute_index_mask: u32,
 	bone_start_index: u16,
 	bone_count: u16,
