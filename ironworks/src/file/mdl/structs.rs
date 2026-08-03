@@ -1,7 +1,7 @@
 // TODO: REMOVE
 #![allow(dead_code, clippy::identity_op)]
 
-use std::io::{Read, Seek};
+use std::io::{Cursor, Read, Seek};
 
 use binrw::helpers::until_eof;
 use binrw::{BinRead, BinResult, Endian, binread};
@@ -117,7 +117,7 @@ pub struct File {
 	pub meshes: Vec<Mesh>,
 
 	#[br(count = attribute_count)]
-	attribute_name_offsets: Vec<u32>,
+	pub attribute_name_offsets: Vec<u32>,
 
 	#[br(count = terrain_shadow_mesh_count)]
 	terrain_shadow_meshes: Vec<TerrainShadowMesh>,
@@ -141,13 +141,13 @@ pub struct File {
 	bone_table_indices: Vec<u16>,
 
 	#[br(count = shape_count)]
-	shapes: Vec<Shape>,
+	pub shapes: Vec<Shape>,
 
 	#[br(count = shape_mesh_count)]
-	shape_meshes: Vec<ShapeMesh>,
+	pub shape_meshes: Vec<ShapeMesh>,
 
 	#[br(count = shape_value_count)]
-	shape_values: Vec<ShapeValue>,
+	pub shape_values: Vec<ShapeValue>,
 
 	#[br(temp)]
 	submesh_bone_map_size: u32,
@@ -186,6 +186,16 @@ pub struct File {
 
 fn current_position<R: Read + Seek>(reader: &mut R, _: Endian, _: ()) -> BinResult<u64> {
 	Ok(reader.stream_position()?)
+}
+
+impl File {
+	/// The null-terminated name at `offset` into the shared string buffer, which is how every table
+	/// of names in the file points at one.
+	pub fn string(&self, offset: u32) -> crate::error::Result<String> {
+		let mut cursor = Cursor::new(&self.string_buffer);
+		cursor.set_position(offset.into());
+		Ok(binrw::NullString::read(&mut cursor)?.to_string())
+	}
 }
 
 fn to_bool(value: u8) -> bool {
@@ -380,7 +390,7 @@ pub struct Mesh {
 pub struct Submesh {
 	pub index_offset: u32,
 	pub index_count: u32,
-	attribute_index_mask: u32,
+	pub attribute_index_mask: u32,
 	bone_start_index: u16,
 	bone_count: u16,
 }
@@ -449,27 +459,30 @@ struct FaceVertex {
 #[binread]
 #[br(little)]
 #[derive(Debug)]
-struct Shape {
-	string_offset: u32,
-	shape_mesh_start_index: [u16; MAX_LODS],
-	shape_mesh_count: [u16; MAX_LODS],
+pub struct Shape {
+	pub string_offset: u32,
+	pub shape_mesh_start_index: [u16; MAX_LODS],
+	pub shape_mesh_count: [u16; MAX_LODS],
 }
 
 #[binread]
 #[br(little)]
 #[derive(Debug)]
-struct ShapeMesh {
-	start_index: u32,
-	shape_value_count: u32,
-	shape_value_offset: u32,
+pub struct ShapeMesh {
+	/// The [`start_index`](Mesh::start_index) of the mesh this rewrites, which is what names it.
+	pub mesh_start_index: u32,
+	pub shape_value_count: u32,
+	pub shape_value_offset: u32,
 }
 
 #[binread]
 #[br(little)]
 #[derive(Debug)]
-struct ShapeValue {
-	offset: u16,
-	value: u16,
+pub struct ShapeValue {
+	/// Which of the mesh's own indices to rewrite.
+	pub offset: u16,
+	/// The vertex to draw in place of the one there.
+	pub vertex: u16,
 }
 
 #[binread]
@@ -500,6 +513,10 @@ mod test {
 		neck_morph_count: u8,
 		face_data_count: u16,
 		culling_grid_count: u16,
+		attribute_count: u16,
+		shape_count: u16,
+		shape_mesh_count: u16,
+		shape_value_count: u16,
 	}
 
 	impl Model {
@@ -528,14 +545,14 @@ mod test {
 			body.extend(1.0f32.to_le_bytes());
 			for count in [
 				0u16,
-				0,
+				self.attribute_count,
 				0,
 				0,
 				bone_count,
 				self.bone_tables.len() as u16,
-				0,
-				0,
-				0,
+				self.shape_count,
+				self.shape_mesh_count,
+				self.shape_value_count,
 			] {
 				body.extend(count.to_le_bytes());
 			}
@@ -556,6 +573,7 @@ mod test {
 			if self.flags2 & 0x10 != 0 {
 				body.extend([0; 3 * 40]);
 			}
+			body.extend(vec![0; usize::from(self.attribute_count) * 4]);
 			// Bone name offsets.
 			body.extend([0; 8]);
 
@@ -575,6 +593,9 @@ mod test {
 				body.extend(vec![0; usize::from(table_indices) * 2]);
 			}
 
+			body.extend(vec![0; usize::from(self.shape_count) * 16]);
+			body.extend(vec![0; usize::from(self.shape_mesh_count) * 12]);
+			body.extend(vec![0; usize::from(self.shape_value_count) * 4]);
 			// Submesh bone map, empty.
 			body.extend(0u32.to_le_bytes());
 			body.extend(vec![0; usize::from(self.neck_morph_count) * 32]);
@@ -666,6 +687,27 @@ mod test {
 			ends_at_the_vertex_buffer(&model);
 			assert!(model.read().extra_lods.is_none());
 		}
+	}
+
+	/// The attribute names and the three shape tables, which sit either side of the bone tables.
+	#[test]
+	fn reads_the_attribute_and_shape_tables() {
+		let model = Model {
+			version: 0x0100_0006,
+			bone_tables: vec![4],
+			attribute_count: 8,
+			shape_count: 23,
+			shape_mesh_count: 61,
+			shape_value_count: 1814,
+			..Default::default()
+		};
+		ends_at_the_vertex_buffer(&model);
+
+		let file = model.read();
+		assert_eq!(file.attribute_name_offsets.len(), 8);
+		assert_eq!(file.shapes.len(), 23);
+		assert_eq!(file.shape_meshes.len(), 61);
+		assert_eq!(file.shape_values.len(), 1814);
 	}
 
 	#[test]

@@ -42,6 +42,7 @@ impl Mesh {
 			.map(|submesh| Submesh {
 				start: (submesh.index_offset - mesh.start_index) as usize,
 				count: submesh.index_count as usize,
+				attributes: submesh.attribute_index_mask,
 			})
 			.collect()
 	}
@@ -227,6 +228,9 @@ pub struct Submesh {
 	pub start: usize,
 	/// How many indices it covers.
 	pub count: usize,
+	/// Bits of the model's [`attribute_names`](super::Model::attribute_names), which is the only
+	/// name a part carries.
+	pub attributes: u32,
 }
 
 // todo: public contents? - i mean, it makes sense to an extent.
