@@ -92,6 +92,8 @@ pub mod shpk;
 pub mod sklb;
 #[cfg(feature = "skp")]
 pub mod skp;
+#[cfg(feature = "spm")]
+pub mod spm;
 #[cfg(feature = "stm")]
 pub mod stm;
 #[cfg(feature = "svb")]
