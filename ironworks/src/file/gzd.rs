@@ -54,7 +54,7 @@ pub struct GrassZone {
 
 	/// Per auto layer, and 1.0 in every file that carries it. Only `0x02000600` and later do.
 	#[br(if(version >= VERSION_LAYER_VALUES))]
-	unknown_a: Option<[f32; 3]>,
+	auto_layer_values: Option<[f32; 3]>,
 
 	#[br(
 		count = model_path_count,
@@ -241,7 +241,7 @@ mod test {
 
 		assert_eq!(file.version(), 0x0200_0600);
 		assert_eq!(file.model_slot_capacity(), 32);
-		assert_eq!(file.unknown_a(), Some([1.0; 3]));
+		assert_eq!(file.auto_layer_values(), Some([1.0; 3]));
 		assert_eq!(file.color_map(), ["_grass1", "", "_grass3"]);
 		assert_eq!(file.model_paths(), ["bg/ffxiv/fst_f1/bgparts/f1_grass.mdl"]);
 
@@ -286,7 +286,7 @@ mod test {
 		.unwrap();
 
 		assert_eq!(file.color_map(), ["_grass1", "_grass4"]);
-		assert_eq!(file.unknown_a(), None);
+		assert_eq!(file.auto_layer_values(), None);
 		assert!(file.grids(Detail::High).is_empty());
 	}
 

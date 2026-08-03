@@ -1,7 +1,6 @@
 //! Structs and utilities for parsing .pbd files.
 
 use std::{
-	collections::HashMap,
 	fmt,
 	io::{Read, Seek, SeekFrom},
 };
@@ -118,12 +117,17 @@ impl Deformer<'_> {
 		self.deformer.id
 	}
 
-	/// Get the bone matrices for this deformer, if any exist.
-	pub fn bone_matrices(&self) -> Option<&HashMap<String, BoneMatrix>> {
+	/// Get the bones this deformer moves, in the order it names them, if it has any.
+	pub fn bones(&self) -> Option<&[(String, BoneMatrix)]> {
 		self.deformer
 			.bone_matrices
 			.as_ref()
-			.map(|s| &s.bone_matrices)
+			.map(|matrices| &matrices.bones[..])
+	}
+
+	/// Get the scale this deformer is applied at.
+	pub fn scale(&self) -> f32 {
+		self.deformer.scale
 	}
 }
 
@@ -151,10 +155,11 @@ struct DeformerData {
 	bone_matrices: Option<BoneMatrices>,
 
 	// TODO: apparently 2.x pbds don't include this?
-	_unknown: f32,
+	scale: f32,
 }
 
-type BoneMatrix = [[f32; 4]; 3];
+/// The rows of a bone's transform, the fourth left off.
+pub type BoneMatrix = [[f32; 4]; 3];
 
 #[binread]
 #[br(little)]
@@ -181,12 +186,12 @@ struct BoneMatrices {
 		})
 		.collect()
 	)]
-	bone_matrices: HashMap<String, BoneMatrix>,
+	bones: Vec<(String, BoneMatrix)>,
 }
 
 impl fmt::Debug for BoneMatrices {
 	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-		self.bone_matrices.fmt(formatter)
+		self.bones.fmt(formatter)
 	}
 }
 

@@ -64,9 +64,9 @@ pub struct EnvLocation {
 	#[br(temp, assert(kind == [0, 0]))]
 	kind: [u8; 2],
 
-	/// Nine values, none of them identified.
+	/// How much of the sky reaches the location, over the same basis as a [`Harmonics`] channel.
 	#[get_copy = "pub"]
-	unknown: [f32; 9],
+	sky_visibility: [f32; 9],
 
 	counts: [u32; TRACK_COUNT],
 
@@ -158,7 +158,8 @@ pub struct Keyframe {
 	time: f32,
 }
 
-/// Light, as second order spherical harmonics with nine coefficients per colour channel.
+/// Light, as second order spherical harmonics with nine coefficients per colour channel. Each
+/// channel runs constant, then `y`, `z`, `x`, then `xy`, `yz`, `3z^2 - 1`, `xz`, `x^2 - y^2`.
 #[binread]
 #[br(little)]
 #[derive(Debug, Clone, Copy, CopyGetters)]
@@ -261,7 +262,7 @@ mod test {
 	fn tracks_start_past_the_ones_before_them() {
 		let file = env(env_location(&[2, 0, 3]));
 
-		assert_eq!(file.unknown(), [0., 1., 2., 3., 4., 5., 6., 7., 8.]);
+		assert_eq!(file.sky_visibility(), [0., 1., 2., 3., 4., 5., 6., 7., 8.]);
 
 		let track = file.track(0).unwrap();
 		assert_eq!(track.len(), 2);
