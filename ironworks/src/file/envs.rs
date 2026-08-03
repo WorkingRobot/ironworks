@@ -121,14 +121,14 @@ pub const OPTIONS: [&str; 12] = [
 	"Visibility oscillation",
 	"Rotation oscillation",
 	"Transform rate",
-	"Modulate RGB colour",
-	"Modulate first colour",
-	"Modulate RGBA colour",
+	"Modulate RGB color",
+	"Modulate first color",
+	"Modulate RGBA color",
 	"Oscillator sync",
 	"Multiply tint",
-	"First colour over white",
-	"Modulate second colour",
-	"Second colour over white",
+	"First color over white",
+	"Modulate second color",
+	"Second color over white",
 ];
 
 /// One weather's worth of settings.
@@ -236,7 +236,7 @@ fn name(kind: u32) -> Option<&'static str> {
 		7 => "Light shaft",
 		8 => "Wetness",
 		9 => "Tone mapping",
-		10 => "Colour filter",
+		10 => "Color filter",
 		11 => "Effect",
 		12 => "Starfield",
 		13 => "Vertical fog",
@@ -246,9 +246,9 @@ fn name(kind: u32) -> Option<&'static str> {
 		30 => "Object transform",
 		31 => "Object oscillator",
 		32 => "Object rotation",
-		33 => "Object RGB colour",
-		34 => "Object RGB colour pair",
-		35 => "Object RGBA colour",
+		33 => "Object RGB color",
+		34 => "Object RGB color pair",
+		35 => "Object RGBA color",
 		_ => return None,
 	})
 }
