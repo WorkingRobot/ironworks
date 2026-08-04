@@ -46,7 +46,10 @@ impl File for Collision {
 
 		let header = structs::Header::read(&mut Cursor::new(&bytes))?;
 		if header.kind == 0 && bytes.len() != MeshList::EMPTY_SIZE {
-			return Ok(Self::Mesh(Mesh::parse(&bytes, MaterialWidth::Wide)?));
+			return Ok(Self::Mesh(
+				Mesh::parse(&bytes, MaterialWidth::Wide)
+					.or_else(|_| Mesh::parse(&bytes, MaterialWidth::Narrow))?,
+			));
 		}
 		Ok(Self::List(<MeshList as BinRead>::read(&mut Cursor::new(
 			&bytes,
@@ -60,12 +63,30 @@ mod test {
 
 	use crate::{error::Error, file::File};
 
-	use super::{Collision, structs};
+	use super::{Collision, MaterialWidth, structs};
 
 	/// A header and one empty leaf, which is the shortest a mesh can be written in.
 	fn mesh() -> Vec<u8> {
 		let mut bytes = vec![0; structs::Header::SIZE + 0x30];
 		bytes[4] = 1;
+		bytes
+	}
+
+	fn mesh_with_width(width: MaterialWidth) -> Vec<u8> {
+		let mut bytes = mesh();
+		let mut node = Vec::new();
+		node.extend([0u8; 8]);
+		node.extend([0i32; 2].into_iter().flat_map(i32::to_le_bytes));
+		node.extend([0.0f32; 6].into_iter().flat_map(f32::to_le_bytes));
+		node.extend([0u16, 0, 3].into_iter().flat_map(u16::to_le_bytes));
+		node.extend([0u8; 2]);
+		node.extend([0.0f32; 9].into_iter().flat_map(f32::to_le_bytes));
+		node.extend([0u8, 1, 2, 0]);
+		match width {
+			MaterialWidth::Narrow => node.extend(0x7004u16.to_le_bytes()),
+			MaterialWidth::Wide => node.extend(0x7004u64.to_le_bytes()),
+		}
+		bytes.extend(node);
 		bytes
 	}
 
@@ -87,6 +108,10 @@ mod test {
 	fn a_mesh_and_a_list_are_told_apart_by_content() {
 		assert!(matches!(
 			Collision::read(Cursor::new(mesh())),
+			Ok(Collision::Mesh(_))
+		));
+		assert!(matches!(
+			Collision::read(Cursor::new(mesh_with_width(MaterialWidth::Narrow))),
 			Ok(Collision::Mesh(_))
 		));
 		assert!(matches!(
