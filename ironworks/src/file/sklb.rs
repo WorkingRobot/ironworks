@@ -8,9 +8,10 @@ use getset::{CopyGetters, Getters};
 
 use crate::{FileStream, error::Result};
 
-use super::{animation, file::File};
+use super::{animation, file::File, havok};
 
 pub use animation::AnimationLayer;
+pub use havok::{Skeleton, Transform};
 
 /// Skeleton data and related mappings.
 #[binread]
@@ -68,6 +69,11 @@ impl SkeletonBinary {
 			(Header::V2(header), Version::V1301) => header.connect_bones.to_vec(),
 			(Header::V2(header), _) => vec![header.connect_bone_index],
 		}
+	}
+
+	/// Read the bones and their reference pose out of the embedded tagfile.
+	pub fn parse_skeleton(&self) -> Result<Skeleton> {
+		havok::skeleton(&self.skeleton)
 	}
 
 	///
