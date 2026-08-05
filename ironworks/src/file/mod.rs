@@ -7,7 +7,9 @@ mod animation;
 #[cfg(any(feature = "eqp", feature = "gmp"))]
 mod block_table;
 mod file;
-#[cfg(feature = "sklb")]
+// sklb reads only the skeleton out of a tagfile and pap only the animations.
+#[cfg(any(feature = "pap", feature = "sklb"))]
+#[cfg_attr(not(all(feature = "pap", feature = "sklb")), allow(dead_code))]
 mod havok;
 #[cfg(any(feature = "lgb", feature = "lvb", feature = "sgb"))]
 pub mod layer;

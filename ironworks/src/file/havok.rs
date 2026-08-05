@@ -1,6 +1,11 @@
 //! Reader for the Havok binary tagfile that animation files embed.
 
-use getset::Getters;
+use std::{
+	f32::consts::{FRAC_PI_2, FRAC_PI_4},
+	ops::Range,
+};
+
+use getset::{CopyGetters, Getters};
 
 use crate::error::{Error, ErrorValue, Result};
 
@@ -17,6 +22,14 @@ const FILE_END: i64 = 7;
 
 /// Bounds the recursion a class describing itself as one of its own members would otherwise cause.
 const MAX_NESTING: usize = 16;
+
+/// Widest spline the basis functions have room for.
+const MAX_DEGREE: usize = 4;
+
+const POLAR32: u8 = 0;
+const THREECOMP40: u8 = 1;
+const THREECOMP48: u8 = 2;
+const UNCOMPRESSED: u8 = 5;
 
 fn invalid(reason: impl Into<String>) -> Error {
 	Error::Invalid(ErrorValue::Other("Havok tagfile".into()), reason.into())
@@ -57,8 +70,133 @@ pub struct Skeleton {
 	reference_pose: Vec<Transform>,
 }
 
+/// An animation and the skeleton it drives.
+#[derive(Debug, Getters, CopyGetters)]
+pub struct Binding {
+	/// Name the skeleton was authored under, which is not a path.
+	#[get = "pub"]
+	skeleton: String,
+
+	/// Bone each transform track drives, indexing the skeleton's bones.
+	#[get = "pub"]
+	bones: Vec<i16>,
+
+	/// How the animation composes with one already playing, `0` being on its own.
+	#[get_copy = "pub"]
+	blend_hint: i32,
+
+	/// The animation itself.
+	#[get = "pub"]
+	motion: Motion,
+}
+
+/// Transform tracks, sampleable at any time within the animation.
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct Motion {
+	/// Length of the animation in seconds.
+	duration: f32,
+
+	/// Frames the animation was authored at, the last of which sits at [`duration`](Self::duration).
+	frames: u32,
+
+	#[getset(skip)]
+	frame_duration: f32,
+
+	#[getset(skip)]
+	frames_per_block: u32,
+
+	/// Tracks are split into blocks of consecutive frames, neighbors sharing a frame.
+	#[getset(skip)]
+	blocks: Vec<Vec<Track>>,
+}
+
+impl Motion {
+	/// Every transform track at `time` seconds into the animation, clamped to its ends.
+	pub fn sample(&self, time: f32) -> Vec<Transform> {
+		let last = self.frames.saturating_sub(1);
+		let frame = match self.frame_duration > 0.0 {
+			true => (time / self.frame_duration).clamp(0.0, last as f32),
+			false => 0.0,
+		};
+
+		// Blocks overlap by a frame, so the last frame of a whole number of them belongs to the last.
+		let span = self.frames_per_block.saturating_sub(1).max(1);
+		let block = ((frame as u32 / span) as usize).min(self.blocks.len() - 1);
+		let local = frame - (block as u32 * span) as f32;
+
+		self.blocks[block]
+			.iter()
+			.map(|track| Transform {
+				translation: track.translation.at(local),
+				rotation: track.rotation.at(local),
+				scale: track.scale.at(local),
+			})
+			.collect()
+	}
+}
+
 /// Read the skeleton the tagfile's animation container names.
 pub(super) fn skeleton(data: &[u8]) -> Result<Skeleton> {
+	let (container, mut objects) = walk(data)?;
+	let &first = container
+		.skeletons
+		.first()
+		.ok_or_else(|| invalid("the animation container names no skeleton"))?;
+	let Some(Object::Skeleton(skeleton)) = resolve(&mut objects, first) else {
+		return Err(invalid(format!("object {first} is not a skeleton")));
+	};
+
+	let bones = skeleton.bones.len();
+	if skeleton.parent_indices.len() != bones || skeleton.reference_pose.len() != bones {
+		return Err(invalid(format!(
+			"{bones} bones against {} parents and {} transforms",
+			skeleton.parent_indices.len(),
+			skeleton.reference_pose.len()
+		)));
+	}
+
+	Ok(skeleton)
+}
+
+/// Read every animation the tagfile's container binds, in the order it names them.
+pub(super) fn animations(data: &[u8]) -> Result<Vec<Binding>> {
+	let (container, mut objects) = walk(data)?;
+	container
+		.bindings
+		.iter()
+		.map(|&reference| {
+			let Some(Object::Binding(binding)) = resolve(&mut objects, reference) else {
+				return Err(invalid(format!(
+					"object {reference} is not an animation binding"
+				)));
+			};
+			let Some(Object::Motion(motion)) = resolve(&mut objects, binding.motion) else {
+				return Err(invalid(format!(
+					"object {} is not a spline compressed animation",
+					binding.motion
+				)));
+			};
+
+			let tracks = motion.blocks.first().map_or(0, Vec::len);
+			if binding.bones.len() != tracks {
+				return Err(invalid(format!(
+					"{tracks} transform tracks against {} bones",
+					binding.bones.len()
+				)));
+			}
+
+			Ok(Binding {
+				skeleton: binding.skeleton,
+				bones: binding.bones,
+				blend_hint: binding.blend_hint,
+				motion,
+			})
+		})
+		.collect()
+}
+
+fn walk(data: &[u8]) -> Result<(Container, Vec<Option<Object>>)> {
 	if data.get(..MAGIC.len()) != Some(&MAGIC) {
 		return Err(invalid("not a Havok tagfile"));
 	}
@@ -73,6 +211,14 @@ pub(super) fn skeleton(data: &[u8]) -> Result<Skeleton> {
 	};
 	tagfile.classes()?;
 	tagfile.objects()
+}
+
+/// References are one-based over the objects the file asked to be remembered.
+fn resolve(objects: &mut [Option<Object>], reference: i64) -> Option<Object> {
+	usize::try_from(reference)
+		.ok()
+		.and_then(|index| objects.get_mut(index.checked_sub(1)?))
+		.and_then(Option::take)
 }
 
 #[derive(Default)]
@@ -112,6 +258,7 @@ enum Arity {
 
 enum Value {
 	Ignored,
+	Bytes(Range<usize>),
 	Integers(Vec<i64>),
 	Floats(Vec<f32>),
 	Strings(Vec<String>),
@@ -121,8 +268,40 @@ enum Value {
 
 enum Object {
 	Skeleton(Skeleton),
-	Skeletons(Vec<i64>),
+	Binding(Bound),
+	Motion(Motion),
+	Container(Container),
 	Other,
+}
+
+/// The objects the root container names, by reference.
+#[derive(Default)]
+struct Container {
+	skeletons: Vec<i64>,
+	bindings: Vec<i64>,
+}
+
+/// A binding before the animation it references has been resolved.
+#[derive(Default)]
+struct Bound {
+	skeleton: String,
+	bones: Vec<i16>,
+	blend_hint: i32,
+	motion: i64,
+}
+
+/// The fields of a spline compressed animation, before its blocks are decompressed.
+#[derive(Default)]
+struct Compressed {
+	duration: f32,
+	frame_duration: f32,
+	frames: i64,
+	frames_per_block: i64,
+	tracks: i64,
+	float_tracks: i64,
+	block_offsets: Vec<i64>,
+	float_block_offsets: Vec<i64>,
+	data: Range<usize>,
 }
 
 struct Tagfile<'a> {
@@ -318,9 +497,9 @@ impl Tagfile<'_> {
 		})
 	}
 
-	fn objects(&mut self) -> Result<Skeleton> {
-		let mut remembered = Vec::<Option<Skeleton>>::new();
-		let mut named = None;
+	fn objects(&mut self) -> Result<(Container, Vec<Option<Object>>)> {
+		let mut remembered = Vec::new();
+		let mut container = None;
 
 		loop {
 			match self.integer()? {
@@ -328,16 +507,15 @@ impl Tagfile<'_> {
 
 				tag @ (OBJECT | OBJECT_REMEMBER) => {
 					let class = self.count()?;
-					let skeleton = match self.object(class)? {
-						Object::Skeleton(skeleton) => Some(skeleton),
-						Object::Skeletons(skeletons) => {
-							named.get_or_insert(skeletons);
-							None
+					let object = match self.object(class)? {
+						Object::Container(named) => {
+							container.get_or_insert(named);
+							Object::Other
 						}
-						Object::Other => None,
+						object => object,
 					};
 					if tag == OBJECT_REMEMBER {
-						remembered.push(skeleton);
+						remembered.push(Some(object));
 					}
 				}
 
@@ -345,26 +523,8 @@ impl Tagfile<'_> {
 			}
 		}
 
-		let named = named.ok_or_else(|| invalid("no animation container"))?;
-		let &first = named
-			.first()
-			.ok_or_else(|| invalid("the animation container names no skeleton"))?;
-		let skeleton = usize::try_from(first)
-			.ok()
-			.and_then(|index| remembered.get_mut(index.checked_sub(1)?))
-			.and_then(Option::take)
-			.ok_or_else(|| invalid(format!("object {first} is not a skeleton")))?;
-
-		let bones = skeleton.bones.len();
-		if skeleton.parent_indices.len() != bones || skeleton.reference_pose.len() != bones {
-			return Err(invalid(format!(
-				"{bones} bones against {} parents and {} transforms",
-				skeleton.parent_indices.len(),
-				skeleton.reference_pose.len()
-			)));
-		}
-
-		Ok(skeleton)
+		let container = container.ok_or_else(|| invalid("no animation container"))?;
+		Ok((container, remembered))
 	}
 
 	fn object(&mut self, class: usize) -> Result<Object> {
@@ -377,7 +537,9 @@ impl Tagfile<'_> {
 
 		let written = self.presence(members.len())?;
 		let mut skeleton = Skeleton::default();
-		let mut skeletons = Vec::new();
+		let mut container = Container::default();
+		let mut bound = Bound::default();
+		let mut compressed = Compressed::default();
 
 		for (index, member) in members.iter().enumerate() {
 			if !present(&written, index) {
@@ -422,8 +584,40 @@ impl Tagfile<'_> {
 				}
 
 				("hkaAnimationContainer", "skeletons", Value::Integers(references)) => {
-					skeletons = references;
+					container.skeletons = references;
 				}
+
+				("hkaAnimationContainer", "bindings", Value::Integers(references)) => {
+					container.bindings = references;
+				}
+
+				("hkaAnimationBinding", "originalSkeletonName", Value::Strings(mut names)) => {
+					bound.skeleton = names.pop().unwrap_or_default();
+				}
+
+				("hkaAnimationBinding", "animation", Value::Integers(references)) => {
+					bound.motion = references.first().copied().unwrap_or_default();
+				}
+
+				("hkaAnimationBinding", "transformTrackToBoneIndices", Value::Integers(bones)) => {
+					bound.bones = bones
+						.into_iter()
+						.map(|bone| {
+							i16::try_from(bone)
+								.map_err(|_| invalid(format!("bone {bone} out of range")))
+						})
+						.collect::<Result<_>>()?;
+				}
+
+				("hkaAnimationBinding", "blendHint", Value::Integers(hint)) => {
+					bound.blend_hint = hint
+						.first()
+						.copied()
+						.and_then(|hint| i32::try_from(hint).ok())
+						.unwrap_or_default();
+				}
+
+				("hkaSplineCompressedAnimation", member, value) => compressed.field(member, value),
 
 				_ => {}
 			}
@@ -431,7 +625,9 @@ impl Tagfile<'_> {
 
 		Ok(match name.as_str() {
 			"hkaSkeleton" => Object::Skeleton(skeleton),
-			"hkaAnimationContainer" => Object::Skeletons(skeletons),
+			"hkaAnimationContainer" => Object::Container(container),
+			"hkaAnimationBinding" => Object::Binding(bound),
+			"hkaSplineCompressedAnimation" => Object::Motion(compressed.decompress(self.data)?),
 			_ => Object::Other,
 		})
 	}
@@ -471,8 +667,9 @@ impl Tagfile<'_> {
 		Ok(match member.kind {
 			Kind::Void => Value::Ignored,
 			Kind::Byte => {
+				let start = self.offset;
 				self.skip(count)?;
-				Value::Ignored
+				Value::Bytes(start..self.offset)
 			}
 			Kind::Integer => {
 				let _element = self.integer()?;
@@ -540,11 +737,471 @@ fn present(bits: &[u8], index: usize) -> bool {
 	bits[index / 8] & (1 << (index % 8)) != 0
 }
 
+impl Compressed {
+	fn field(&mut self, member: &str, value: Value) {
+		fn head<T: Default>(values: Vec<T>) -> T {
+			values.into_iter().next().unwrap_or_default()
+		}
+
+		match (member, value) {
+			("duration", Value::Floats(seconds)) => self.duration = head(seconds),
+			("frameDuration", Value::Floats(seconds)) => self.frame_duration = head(seconds),
+			("numFrames", Value::Integers(count)) => self.frames = head(count),
+			("maxFramesPerBlock", Value::Integers(count)) => self.frames_per_block = head(count),
+			("numberOfTransformTracks", Value::Integers(count)) => self.tracks = head(count),
+			("numberOfFloatTracks", Value::Integers(count)) => self.float_tracks = head(count),
+			("blockOffsets", Value::Integers(offsets)) => self.block_offsets = offsets,
+			("floatBlockOffsets", Value::Integers(offsets)) => self.float_block_offsets = offsets,
+			("data", Value::Bytes(range)) => self.data = range,
+			_ => {}
+		}
+	}
+
+	/// Decompress every block, each of which holds one spline per track over its own frames.
+	fn decompress(self, tagfile: &[u8]) -> Result<Motion> {
+		let bounded = |value: i64, what: &str| {
+			usize::try_from(value).map_err(|_| invalid(format!("{what} {value} out of range")))
+		};
+		let tracks = bounded(self.tracks, "transform track count")?;
+		let float_tracks = bounded(self.float_tracks, "float track count")?;
+		let data = tagfile
+			.get(self.data)
+			.ok_or_else(|| invalid("animation data outside the tagfile"))?;
+
+		let mut blocks = Vec::new();
+		for (index, &offset) in self.block_offsets.iter().enumerate() {
+			let start = bounded(offset, "block offset")?;
+			let mut reader = Reader {
+				data,
+				offset: start,
+			};
+			blocks.push(reader.block(tracks, float_tracks)?);
+
+			// The float tracks follow the transform tracks, so where they start says how much of the
+			// block the transform tracks were meant to take.
+			if let Some(&declared) = self.float_block_offsets.get(index) {
+				let read = reader.offset - start;
+				if bounded(declared, "float block offset")? != read {
+					return Err(invalid(format!(
+						"block {index} read {read} bytes of a declared {declared}"
+					)));
+				}
+			}
+		}
+		if blocks.is_empty() {
+			return Err(invalid("an animation with no blocks"));
+		}
+
+		Ok(Motion {
+			duration: self.duration,
+			frames: u32::try_from(self.frames)
+				.map_err(|_| invalid(format!("frame count {} out of range", self.frames)))?,
+			frame_duration: self.frame_duration,
+			frames_per_block: u32::try_from(self.frames_per_block).map_err(|_| {
+				invalid(format!(
+					"block length {} out of range",
+					self.frames_per_block
+				))
+			})?,
+			blocks,
+		})
+	}
+}
+
+/// One bone's translation, rotation and scale over a block of frames.
+#[derive(Debug)]
+struct Track {
+	translation: Vectors,
+	rotation: Rotations,
+	scale: Vectors,
+}
+
+/// A translation or scale curve. The three axes share knots, and an axis holding a single point
+/// holds it for the whole block.
+#[derive(Debug)]
+struct Vectors {
+	degree: usize,
+	knots: Vec<u8>,
+	axes: [Vec<f32>; 3],
+}
+
+impl Vectors {
+	fn at(&self, frame: f32) -> [f32; 4] {
+		let mut value = [0.0; 4];
+		for (component, axis) in value.iter_mut().zip(&self.axes) {
+			*component = match basis(&self.knots, self.degree, axis.len(), frame) {
+				Some((span, weights)) => (0..=self.degree)
+					.map(|index| axis[span - index] * weights[index])
+					.sum(),
+				None => axis[0],
+			};
+		}
+		value
+	}
+}
+
+/// A rotation curve, holding a single quaternion when the bone does not turn over the block.
+#[derive(Debug)]
+struct Rotations {
+	degree: usize,
+	knots: Vec<u8>,
+	points: Vec<[f32; 4]>,
+}
+
+impl Rotations {
+	fn at(&self, frame: f32) -> [f32; 4] {
+		let Some((span, weights)) = basis(&self.knots, self.degree, self.points.len(), frame)
+		else {
+			return self.points[0];
+		};
+
+		let mut rotation = [0.0; 4];
+		for (index, weight) in weights.iter().enumerate().take(self.degree + 1) {
+			for (component, value) in rotation.iter_mut().zip(self.points[span - index]) {
+				*component += value * weight;
+			}
+		}
+
+		// Blending unit quaternions gives a point inside the sphere rather than on it.
+		let length = rotation
+			.iter()
+			.map(|value| value * value)
+			.sum::<f32>()
+			.sqrt();
+		match length > 0.0 {
+			true => rotation.map(|component| component / length),
+			false => [0.0, 0.0, 0.0, 1.0],
+		}
+	}
+}
+
+/// Weight of each of the `degree + 1` control points a spline blends at `frame`, and the index of
+/// the last of them. A curve with too few points for its degree is constant, and has none.
+///
+/// Basis_ITS1 and GetPoint_NR1 of "Time-efficient NURBS curve evaluation algorithms".
+fn basis(
+	knots: &[u8],
+	degree: usize,
+	points: usize,
+	frame: f32,
+) -> Option<(usize, [f32; MAX_DEGREE + 1])> {
+	if points <= degree || knots.len() < points + degree + 1 {
+		return None;
+	}
+
+	let span = span(knots, degree, points, frame);
+	let mut weights = [0.0; MAX_DEGREE + 1];
+	weights[0] = 1.0;
+
+	for order in 1..=degree {
+		for index in (0..order).rev() {
+			let low = f32::from(knots[span - index]);
+			let high = f32::from(knots[span + order - index]);
+			// Knots repeat at the ends of the curve, where the interval they span carries no weight.
+			let scaled = match high > low {
+				true => weights[index] * (frame - low) / (high - low),
+				false => 0.0,
+			};
+			weights[index + 1] += weights[index] - scaled;
+			weights[index] = scaled;
+		}
+	}
+
+	Some((span, weights))
+}
+
+/// The knot span `frame` falls in, which is algorithm A2.1 of The NURBS Book, 2nd edition.
+fn span(knots: &[u8], degree: usize, points: usize, frame: f32) -> usize {
+	if frame >= f32::from(knots[points]) {
+		return points - 1;
+	}
+
+	let (mut low, mut high) = (degree, points);
+	let mut middle = (low + high) / 2;
+	while frame < f32::from(knots[middle]) || frame >= f32::from(knots[middle + 1]) {
+		match frame < f32::from(knots[middle]) {
+			true => high = middle,
+			false => low = middle,
+		}
+		// Knots the file wrote out of order would otherwise never narrow the search.
+		let next = (low + high) / 2;
+		if next == middle {
+			break;
+		}
+		middle = next;
+	}
+
+	middle
+}
+
+/// Put the component a three-component packing left out back where it belongs, its magnitude being
+/// whatever the other three leave of a unit quaternion.
+fn compose(components: [f32; 3], missing: usize, negative: bool) -> [f32; 4] {
+	let mut rotation = [0.0; 4];
+	for (index, component) in rotation.iter_mut().enumerate() {
+		if index < missing {
+			*component = components[index];
+		} else if index > missing {
+			*component = components[index - 1];
+		}
+	}
+
+	let square = 1.0 - components.iter().map(|value| value * value).sum::<f32>();
+	rotation[missing] = match square > 0.0 {
+		true => square.sqrt(),
+		false => 0.0,
+	};
+	if negative {
+		rotation[missing] = -rotation[missing];
+	}
+
+	rotation
+}
+
+/// Cursor over one animation's compressed data.
+struct Reader<'a> {
+	data: &'a [u8],
+	offset: usize,
+}
+
+impl<'a> Reader<'a> {
+	fn take(&mut self, size: usize) -> Result<&'a [u8]> {
+		let end = self
+			.offset
+			.checked_add(size)
+			.filter(|&end| end <= self.data.len())
+			.ok_or_else(|| invalid("read past the end of the animation data"))?;
+		let taken = &self.data[self.offset..end];
+		self.offset = end;
+		Ok(taken)
+	}
+
+	fn byte(&mut self) -> Result<u8> {
+		Ok(self.take(1)?[0])
+	}
+
+	fn short(&mut self) -> Result<u16> {
+		Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+	}
+
+	fn word(&mut self) -> Result<u32> {
+		Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+	}
+
+	fn real(&mut self) -> Result<f32> {
+		Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+	}
+
+	/// Values sit at a multiple of their own width from the start of the animation's data.
+	fn align(&mut self, to: usize) -> Result<()> {
+		self.offset = self
+			.offset
+			.checked_next_multiple_of(to)
+			.ok_or_else(|| invalid("read past the end of the animation data"))?;
+		Ok(())
+	}
+
+	/// Every track's masks lead the block, then each track's three curves in turn.
+	fn block(&mut self, tracks: usize, float_tracks: usize) -> Result<Vec<Track>> {
+		let masks = self.take(
+			tracks
+				.checked_mul(4)
+				.ok_or_else(|| invalid("too many transform tracks"))?,
+		)?;
+		self.take(float_tracks)?;
+		self.align(4)?;
+
+		let mut block = Vec::new();
+		for mask in masks.chunks_exact(4) {
+			let translation = self.vectors(mask[1], mask[0] & 3, 0.0)?;
+			self.align(4)?;
+			let rotation = self.rotations(mask[2], (mask[0] >> 2) & 0xf)?;
+			self.align(4)?;
+			let scale = self.vectors(mask[3], (mask[0] >> 6) & 3, 1.0)?;
+			self.align(4)?;
+
+			block.push(Track {
+				translation,
+				rotation,
+				scale,
+			});
+		}
+
+		Ok(block)
+	}
+
+	/// A curve's control point count, degree and knots, which lead every dynamic track.
+	fn spline(&mut self) -> Result<(usize, usize, &'a [u8])> {
+		let points = usize::from(self.short()?) + 1;
+		let degree = usize::from(self.byte()?);
+		if degree > MAX_DEGREE {
+			return Err(invalid(format!("spline of degree {degree}")));
+		}
+		let knots = self.take(points + degree + 1)?;
+		Ok((points, degree, knots))
+	}
+
+	fn vectors(&mut self, present: u8, quantization: u8, identity: f32) -> Result<Vectors> {
+		let mut axes = [const { Vec::new() }; 3];
+
+		if present & 0x70 == 0 {
+			for (index, axis) in axes.iter_mut().enumerate() {
+				axis.push(match present & (1 << index) {
+					0 => identity,
+					_ => self.real()?,
+				});
+			}
+			return Ok(Vectors {
+				degree: 0,
+				knots: Vec::new(),
+				axes,
+			});
+		}
+
+		let (points, degree, knots) = self.spline()?;
+		self.align(4)?;
+
+		let mut extents = [(0.0, 0.0); 3];
+		for (index, axis) in axes.iter_mut().enumerate() {
+			if present & (0x10 << index) != 0 {
+				extents[index] = (self.real()?, self.real()?);
+			} else if present & (1 << index) != 0 {
+				axis.push(self.real()?);
+			} else {
+				axis.push(identity);
+			}
+		}
+
+		for _ in 0..points {
+			for (index, axis) in axes.iter_mut().enumerate() {
+				if present & (0x10 << index) == 0 {
+					continue;
+				}
+				let ratio = match quantization {
+					0 => f32::from(self.byte()?) / 255.0,
+					_ => f32::from(self.short()?) / 65535.0,
+				};
+				let (low, high) = extents[index];
+				axis.push(low + (high - low) * ratio);
+			}
+		}
+
+		Ok(Vectors {
+			degree,
+			knots: knots.to_vec(),
+			axes,
+		})
+	}
+
+	fn rotations(&mut self, present: u8, quantization: u8) -> Result<Rotations> {
+		if present & 0xf0 == 0 {
+			let point = match present & 0xf {
+				0 => [0.0, 0.0, 0.0, 1.0],
+				_ => self.quaternion(quantization)?,
+			};
+			return Ok(Rotations {
+				degree: 0,
+				knots: Vec::new(),
+				points: vec![point],
+			});
+		}
+
+		let (count, degree, knots) = self.spline()?;
+		self.align(match quantization {
+			POLAR32 | UNCOMPRESSED => 4,
+			THREECOMP48 => 2,
+			_ => 1,
+		})?;
+
+		let mut points = Vec::new();
+		for _ in 0..count {
+			points.push(self.quaternion(quantization)?);
+		}
+
+		Ok(Rotations {
+			degree,
+			knots: knots.to_vec(),
+			points,
+		})
+	}
+
+	fn quaternion(&mut self, quantization: u8) -> Result<[f32; 4]> {
+		match quantization {
+			POLAR32 => self.polar32(),
+			THREECOMP40 => self.threecomp40(),
+			THREECOMP48 => self.threecomp48(),
+			UNCOMPRESSED => Ok([self.real()?, self.real()?, self.real()?, self.real()?]),
+			other => Err(invalid(format!(
+				"unsupported rotation quantization {other}"
+			))),
+		}
+	}
+
+	/// A polar angle pair and a magnitude, with a sign bit for each component.
+	fn polar32(&mut self) -> Result<[f32; 4]> {
+		let packed = self.word()?;
+
+		let scaled = ((packed >> 18) & 0x3ff) as f32 / 1023.0;
+		let last = 1.0 - scaled * scaled;
+		let magnitude = (1.0 - last * last).sqrt();
+
+		let angles = (packed & 0x3_ffff) as f32;
+		let mut phi = angles.sqrt().floor();
+		let mut theta = 0.0;
+		if phi > 0.0 {
+			theta = FRAC_PI_4 * (angles - phi * phi) / phi;
+			phi *= FRAC_PI_2 / 511.0;
+		}
+
+		let mut rotation = [
+			phi.sin() * theta.cos() * magnitude,
+			phi.sin() * theta.sin() * magnitude,
+			phi.cos() * magnitude,
+			last,
+		];
+		for (index, component) in rotation.iter_mut().enumerate() {
+			if packed & (0x1000_0000 << index) != 0 {
+				*component = -*component;
+			}
+		}
+
+		Ok(rotation)
+	}
+
+	/// Three twelve-bit components, the index of the one left out, and its sign.
+	fn threecomp40(&mut self) -> Result<[f32; 4]> {
+		let bytes = self.take(5)?;
+		let packed = u64::from(u32::from_le_bytes(bytes[..4].try_into().unwrap()))
+			| (u64::from(bytes[4]) << 32);
+
+		let components = [0, 12, 24]
+			.map(|shift| (((packed >> shift) & 0xfff) as i32 - 2047) as f32 * 0.000345436);
+		Ok(compose(
+			components,
+			((packed >> 36) & 3) as usize,
+			(packed >> 38) & 1 != 0,
+		))
+	}
+
+	/// Three fifteen-bit components, the index of the one left out, and its sign.
+	fn threecomp48(&mut self) -> Result<[f32; 4]> {
+		let bytes = self.take(6)?;
+		let packed = [0, 2, 4].map(|at| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()));
+
+		let missing = usize::from(((packed[1] >> 14) & 2) | ((packed[0] >> 15) & 1));
+		let negative = packed[2] >> 15 != 0;
+		let components =
+			packed.map(|value| (i32::from(value & 0x7fff) - 16383) as f32 * 0.000043161);
+
+		Ok(compose(components, missing, negative))
+	}
+}
+
 #[cfg(test)]
 mod test {
 	use crate::error::Error;
 
-	use super::{Skeleton, skeleton};
+	use super::{Binding, Skeleton, animations, skeleton};
 
 	/// The tagfile writes every integer as six bits and a sign, then seven bits a byte.
 	fn integer(value: i64) -> Vec<u8> {
@@ -782,5 +1439,334 @@ mod test {
 		for length in [12, bytes.len() / 2, bytes.len() - 8] {
 			assert!(skeleton(&bytes[..length]).is_err());
 		}
+	}
+
+	/// Everything a spline block writes sits at a multiple of four from the block's own start.
+	fn pad(bytes: &mut Vec<u8>) {
+		// Nothing promises the padding is zeroed.
+		bytes.resize(bytes.len().next_multiple_of(4), 0xCC);
+	}
+
+	/// A spline's item count, degree and knots, which lead a dynamic curve.
+	fn knots(values: &[u8], degree: u8) -> Vec<u8> {
+		let items = u16::try_from(values.len() - usize::from(degree) - 2).unwrap();
+		let mut bytes = items.to_le_bytes().to_vec();
+		bytes.push(degree);
+		bytes.extend(values);
+		bytes
+	}
+
+	fn reals(values: &[f32]) -> Vec<u8> {
+		values
+			.iter()
+			.flat_map(|value| value.to_le_bytes())
+			.collect()
+	}
+
+	/// A block holding one track, whose three curves are written as given.
+	fn block(masks: [u8; 4], curves: &[&[u8]]) -> Vec<u8> {
+		let mut bytes = masks.to_vec();
+		for curve in curves {
+			pad(&mut bytes);
+			bytes.extend(*curve);
+		}
+		pad(&mut bytes);
+		bytes
+	}
+
+	/// A container binding one animation over `bones`, whose blocks are written verbatim.
+	fn animation(bones: &[i64], frames: i64, per_block: i64, blocks: &[Vec<u8>]) -> Vec<u8> {
+		let mut bytes = super::MAGIC.to_vec();
+		bytes.extend(integer(1));
+		bytes.extend(integer(3));
+
+		bytes.extend(class(
+			"hkaAnimationContainer",
+			0,
+			&[
+				member("skeletons", 0x18, Some("hkaSkeleton")),
+				member("bindings", 0x18, Some("hkaAnimationBinding")),
+			],
+		));
+		bytes.extend(class(
+			"hkaAnimationBinding",
+			0,
+			&[
+				member("originalSkeletonName", 0xa, None),
+				member("animation", 0x8, Some("hkaAnimation")),
+				member("transformTrackToBoneIndices", 0x12, None),
+				member("blendHint", 0x2, None),
+			],
+		));
+		bytes.extend(class(
+			"hkaSplineCompressedAnimation",
+			0,
+			&[
+				member("duration", 0x3, None),
+				member("numberOfTransformTracks", 0x2, None),
+				member("numFrames", 0x2, None),
+				member("maxFramesPerBlock", 0x2, None),
+				member("frameDuration", 0x3, None),
+				member("blockOffsets", 0x12, None),
+				member("floatBlockOffsets", 0x12, None),
+				member("data", 0x11, None),
+			],
+		));
+
+		// The binding, which is object one, naming the animation that follows it.
+		bytes.extend(integer(4));
+		bytes.extend(integer(2));
+		bytes.push(0b1111);
+		bytes.extend(string("test:mdl:n_root"));
+		bytes.extend(integer(2));
+		bytes.extend(integer(bones.len() as i64));
+		bytes.extend(integer(4));
+		bytes.extend(bones.iter().flat_map(|&bone| integer(bone)));
+		bytes.extend(integer(1));
+
+		let mut data = Vec::new();
+		let mut offsets = Vec::new();
+		let mut ends = Vec::new();
+		for block in blocks {
+			offsets.push(data.len() as i64);
+			ends.push(block.len() as i64);
+			data.extend(block);
+			data.resize(data.len().next_multiple_of(16), 0xCC);
+		}
+
+		bytes.extend(integer(4));
+		bytes.extend(integer(3));
+		bytes.push(0b1111_1111);
+		bytes.extend(((frames - 1) as f32).to_le_bytes());
+		bytes.extend(integer(bones.len() as i64));
+		bytes.extend(integer(frames));
+		bytes.extend(integer(per_block));
+		bytes.extend(1.0f32.to_le_bytes());
+		for run in [&offsets, &ends] {
+			bytes.extend(integer(run.len() as i64));
+			bytes.extend(integer(4));
+			bytes.extend(run.iter().flat_map(|&value| integer(value)));
+		}
+		bytes.extend(integer(data.len() as i64));
+		bytes.extend(&data);
+
+		// The container, naming no skeleton and the binding above.
+		bytes.extend(integer(4));
+		bytes.extend(integer(1));
+		bytes.push(0b11);
+		bytes.extend(integer(0));
+		bytes.extend(integer(1));
+		bytes.extend(integer(1));
+
+		bytes.extend(integer(7));
+		bytes
+	}
+
+	fn bind(bytes: Vec<u8>) -> Binding {
+		animations(&bytes).unwrap().pop().unwrap()
+	}
+
+	fn close(value: [f32; 4], expected: [f32; 4]) {
+		let error = value
+			.iter()
+			.zip(expected)
+			.map(|(a, b)| (a - b).abs())
+			.fold(0.0, f32::max);
+		assert!(error < 1e-5, "{value:?} against {expected:?}");
+	}
+
+	/// Three control points over `[0, 10]`, with a knot at 5, so a linear curve interpolates the
+	/// first and last of them and blends a named pair in between.
+	fn linear_track(quantization: u8) -> Vec<u8> {
+		let mut curve = knots(&[0, 0, 5, 10, 10], 1);
+		pad(&mut curve);
+		curve.extend(reals(&[1.0, 3.0, 0.0, 2.0, 0.0, 4.0]));
+		for point in [[0, 0, 0], [u16::MAX, 0, 0], [0, u16::MAX, 0]] {
+			for value in point {
+				match quantization {
+					0 => curve.push((value >> 8) as u8),
+					_ => curve.extend(value.to_le_bytes()),
+				}
+			}
+		}
+		block([quantization, 0x70, 0x00, 0x00], &[&curve])
+	}
+
+	#[test]
+	fn reads_the_animation_the_container_binds() {
+		let file = bind(animation(&[7], 11, 11, &[linear_track(0)]));
+		assert_eq!(file.skeleton(), "test:mdl:n_root");
+		assert_eq!(file.bones(), &[7]);
+		assert_eq!(file.blend_hint(), 1);
+		assert_eq!(file.motion().frames(), 11);
+		assert_eq!(file.motion().duration(), 10.0);
+	}
+
+	/// A curve interpolates its end control points, and between two knots it blends the pair the
+	/// knot span names, whether its points were quantized to eight bits or sixteen.
+	#[test]
+	fn blends_the_control_points_a_knot_span_names() {
+		for quantization in [0, 1] {
+			let file = bind(animation(&[0], 11, 11, &[linear_track(quantization)]));
+			let motion = file.motion();
+
+			for (time, expected) in [
+				(0.0, [1.0, 0.0, 0.0, 0.0]),
+				(2.5, [2.0, 0.0, 0.0, 0.0]),
+				(5.0, [3.0, 0.0, 0.0, 0.0]),
+				(7.5, [2.0, 1.0, 0.0, 0.0]),
+				(10.0, [1.0, 2.0, 0.0, 0.0]),
+			] {
+				close(motion.sample(time)[0].translation, expected);
+			}
+		}
+	}
+
+	/// The weights a spline blends with sum to one, so a curve whose control points agree holds
+	/// their value at every frame of the block, whatever its degree.
+	#[test]
+	fn weights_a_spline_blends_with_sum_to_one() {
+		let mut curve = knots(&[0, 0, 0, 0, 4, 8, 12, 12, 12, 12], 3);
+		pad(&mut curve);
+		curve.extend(reals(&[2.0, 6.0, 0.0, 1.0, 0.0, 3.0]));
+		curve.extend([255; 18]);
+		let file = bind(animation(
+			&[0],
+			13,
+			13,
+			&[block([0x00, 0x70, 0x00, 0x00], &[&curve])],
+		));
+
+		let motion = file.motion();
+		for step in 0..=120 {
+			close(
+				motion.sample(step as f32 / 10.0)[0].translation,
+				[6.0, 1.0, 3.0, 0.0],
+			);
+		}
+	}
+
+	/// A track the block writes no curve for holds the identity, which is zero for a translation
+	/// and one for a scale.
+	#[test]
+	fn holds_the_identity_where_a_track_writes_nothing() {
+		let file = bind(animation(
+			&[0],
+			2,
+			2,
+			&[block(
+				[0x00, 0x01, 0x00, 0x02],
+				&[&reals(&[9.0]), &[], &reals(&[4.0])],
+			)],
+		));
+
+		let sample = file.motion().sample(0.0);
+		close(sample[0].translation, [9.0, 0.0, 0.0, 0.0]);
+		close(sample[0].rotation, [0.0, 0.0, 0.0, 1.0]);
+		close(sample[0].scale, [1.0, 4.0, 1.0, 0.0]);
+	}
+
+	/// A static rotation of the given quantization, which the mask names in its top four bits.
+	fn rotation(quantization: u8, packed: &[u8]) -> Vec<u8> {
+		block([quantization << 2, 0x00, 0x01, 0x00], &[&[], packed])
+	}
+
+	#[test]
+	fn unpacks_a_polar32_rotation() {
+		let file = bind(animation(&[0], 2, 2, &[rotation(0, &[57, 48, 240, 58])]));
+		close(
+			file.motion().sample(0.0)[0].rotation,
+			[-0.2793129, -0.04789301, 0.7980568, 0.5317856],
+		);
+	}
+
+	#[test]
+	fn unpacks_a_threecomp40_rotation() {
+		let file = bind(animation(
+			&[0],
+			2,
+			2,
+			&[rotation(1, &[244, 129, 187, 176, 100])],
+		));
+		close(
+			file.motion().sample(0.0)[0].rotation,
+			[-0.5343895, 0.3292005, -0.7214217, -0.2925843],
+		);
+	}
+
+	#[test]
+	fn unpacks_a_threecomp48_rotation() {
+		let file = bind(animation(
+			&[0],
+			2,
+			2,
+			&[rotation(2, &[32, 206, 16, 39, 255, 191])],
+		));
+		close(
+			file.motion().sample(0.0)[0].rotation,
+			[0.1561133, -0.9485411, -0.2754967, 0.0],
+		);
+	}
+
+	/// Blocks hold consecutive runs of frames and share the frame they meet on, so a time past the
+	/// first block's last frame is read out of the second.
+	#[test]
+	fn samples_the_block_a_frame_falls_in() {
+		let first = block(
+			[0x00, 0x01, 0x00, 0x00],
+			&[&reals(&[1.0]), &[], &reals(&[])],
+		);
+		let second = block(
+			[0x00, 0x01, 0x00, 0x00],
+			&[&reals(&[2.0]), &[], &reals(&[])],
+		);
+		let file = bind(animation(&[0], 7, 4, &[first, second]));
+
+		let motion = file.motion();
+		close(motion.sample(0.0)[0].translation, [1.0, 0.0, 0.0, 0.0]);
+		close(motion.sample(2.9)[0].translation, [1.0, 0.0, 0.0, 0.0]);
+		close(motion.sample(3.0)[0].translation, [2.0, 0.0, 0.0, 0.0]);
+		close(motion.sample(6.0)[0].translation, [2.0, 0.0, 0.0, 0.0]);
+		// A time past the end holds the last frame rather than reading past the last block.
+		close(motion.sample(99.0)[0].translation, [2.0, 0.0, 0.0, 0.0]);
+	}
+
+	/// Where the float tracks start says how far the transform tracks were meant to read, so a
+	/// block that reads a different number of bytes has gone out of step.
+	#[test]
+	fn rejects_a_block_that_reads_the_wrong_length() {
+		let mut block = linear_track(0);
+		block.extend([0; 4]);
+		assert!(matches!(
+			animations(&animation(&[0], 11, 11, &[block])),
+			Err(Error::Invalid(..))
+		));
+	}
+
+	/// A track count and a bone list that disagree describe nothing that can be posed.
+	#[test]
+	fn rejects_a_bone_list_the_tracks_do_not_match() {
+		assert!(matches!(
+			animations(&animation(&[0, 1], 11, 11, &[linear_track(0)])),
+			Err(Error::Invalid(..))
+		));
+	}
+
+	#[test]
+	fn rejects_a_spline_too_deep_to_blend() {
+		let mut curve = knots(&[0; 9], 7);
+		pad(&mut curve);
+		let file = animation(&[0], 11, 11, &[block([0x00, 0x70, 0x00, 0x00], &[&curve])]);
+		assert!(matches!(animations(&file), Err(Error::Invalid(..))));
+	}
+
+	/// Paps declare a skeleton class without ever writing one, so the skeleton reader has nothing
+	/// to give back.
+	#[test]
+	fn a_pap_names_no_skeleton() {
+		assert!(matches!(
+			skeleton(&animation(&[0], 11, 11, &[linear_track(0)])),
+			Err(Error::Invalid(..))
+		));
 	}
 }

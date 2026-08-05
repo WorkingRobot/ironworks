@@ -7,7 +7,9 @@ use getset::CopyGetters;
 
 use crate::{FileStream, error::Result};
 
-use super::File;
+use super::{File, havok};
+
+pub use havok::{Binding, Motion, Transform};
 
 /// The animations one skeleton can play: a Havok animation container, and the timeline each
 /// animation is driven by.
@@ -65,6 +67,12 @@ impl AnimationPack {
 	/// [`animations`](Self::animations).
 	pub fn timelines(&self) -> &[Vec<u8>] {
 		&self.timelines
+	}
+
+	/// Read the motions out of the embedded tagfile, in the order
+	/// [`Animation::havok_index`](Animation::havok_index) names them.
+	pub fn parse_animations(&self) -> Result<Vec<Binding>> {
+		havok::animations(&self.havok)
 	}
 }
 
