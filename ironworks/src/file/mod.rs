@@ -7,6 +7,8 @@ mod animation;
 #[cfg(any(feature = "eqp", feature = "gmp"))]
 mod block_table;
 mod file;
+#[cfg(feature = "sklb")]
+mod havok;
 #[cfg(any(feature = "lgb", feature = "lvb", feature = "sgb"))]
 pub mod layer;
 #[cfg(any(feature = "shcd", feature = "shpk"))]
