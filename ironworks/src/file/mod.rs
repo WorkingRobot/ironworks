@@ -20,6 +20,8 @@ pub mod atch;
 pub mod avfx;
 #[cfg(feature = "cmp")]
 pub mod cmp;
+#[cfg(feature = "cutb")]
+pub mod cutb;
 #[cfg(feature = "eid")]
 pub mod eid;
 #[cfg(feature = "envb")]
