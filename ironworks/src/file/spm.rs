@@ -163,7 +163,9 @@ pub fn name(id: u32) -> Option<&'static str> {
 		0xA4D6_1674 => "COMMON",
 
 		0x4177_21BB => "DEFAULT",
+		0x8B26_53B1 => "HAIR",
 		0x56F1_6FCB => "LEGACY",
+		0xEC8B_7389 => "HALF",
 
 		_ => return None,
 	})
@@ -265,7 +267,7 @@ mod test {
 
 	#[test]
 	fn a_hash_the_format_does_not_name() {
-		assert_eq!(name(0x8B26_53B1), None);
+		assert_eq!(name(0x0000_0000), None);
 	}
 
 	#[test]
