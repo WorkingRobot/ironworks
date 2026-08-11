@@ -29,7 +29,7 @@ pub struct ShaderPackage {
 	system_keys: Vec<Key>,
 	scene_keys: Vec<Key>,
 	material_keys: Vec<Key>,
-	subview_defaults: [u32; 2],
+	technique_subview: [u32; 2],
 	nodes: Vec<Node>,
 	aliases: Vec<NodeAlias>,
 	clusters: Vec<AliasCluster>,
@@ -59,7 +59,7 @@ impl Node {
 	}
 
 	/// A value for each of the package's keys, in the order it declares them: system, then scene,
-	/// then material, then the two subview keys.
+	/// then material, then the technique and the subview.
 	pub fn keys(&self) -> &[u32] {
 		&self.keys
 	}
@@ -228,9 +228,9 @@ impl ShaderPackage {
 		&self.material_keys
 	}
 
-	/// Defaults for the two subview keys.
-	pub fn subview_defaults(&self) -> [u32; 2] {
-		self.subview_defaults
+	/// Defaults for the two keys trailing the declared ones: the technique, then the subview.
+	pub fn technique_subview(&self) -> [u32; 2] {
+		self.technique_subview
 	}
 
 	/// Every combination of key values the package knows, and the shaders each one selects. This is
@@ -334,8 +334,8 @@ impl ShaderPackage {
 		let scene_keys = keys(&mut walk, header.scene_key_count, "scene key table")?;
 		let material_keys = keys(&mut walk, header.material_key_count, "material key table")?;
 
-		let end = walk.extent(2, 4, "subview key defaults")?;
-		let subview_defaults = [word(bytes, walk.at), word(bytes, walk.at + 4)];
+		let end = walk.extent(2, 4, "technique and subview defaults")?;
+		let technique_subview = [word(bytes, walk.at), word(bytes, walk.at + 4)];
 		walk.at = end;
 
 		let (nodes, aliases, clusters) = read_selectors(&mut walk, &header)?;
@@ -363,7 +363,7 @@ impl ShaderPackage {
 			system_keys,
 			scene_keys,
 			material_keys,
-			subview_defaults,
+			technique_subview,
 			nodes,
 			aliases,
 			clusters,
@@ -498,7 +498,7 @@ fn read_selectors(
 	let node_prefix = if tessellated { 32 } else { 24 };
 	let pass_words = if tessellated { 6 } else { 3 };
 
-	// A node carries a value for every key the package declares, plus the two subview keys.
+	// A node carries a value for every key the package declares, plus the technique and the subview.
 	let key_count = to_usize(header.system_key_count)
 		+ to_usize(header.scene_key_count)
 		+ to_usize(header.material_key_count)
