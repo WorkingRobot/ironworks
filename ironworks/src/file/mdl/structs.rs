@@ -132,13 +132,13 @@ pub struct File {
 	pub material_name_offsets: Vec<u32>,
 
 	#[br(count = bone_count)]
-	bone_name_offsets: Vec<u32>,
+	pub bone_name_offsets: Vec<u32>,
 
 	#[br(count = bone_table_count, args { inner: (version,) })]
-	bone_tables: Vec<BoneTable>,
+	pub bone_tables: Vec<BoneTable>,
 
 	#[br(count = bone_table_array_count_total)]
-	bone_table_indices: Vec<u16>,
+	pub bone_table_indices: Vec<u16>,
 
 	#[br(count = shape_count)]
 	pub shapes: Vec<Shape>,
@@ -189,6 +189,26 @@ fn current_position<R: Read + Seek>(reader: &mut R, _: Endian, _: ()) -> BinResu
 }
 
 impl File {
+	/// The bones one table names, as indices into [`Self::bone_name_offsets`]. A span states its
+	/// position in 4 byte units from its own entry, and the shared array follows the entries.
+	pub fn bone_table(&self, index: usize) -> &[u16] {
+		match self.bone_tables.get(index) {
+			Some(BoneTable::Inline {
+				bone_index,
+				bone_count,
+			}) => bone_index
+				.get(..usize::from(*bone_count))
+				.unwrap_or_default(),
+			Some(BoneTable::Span { offset, size }) => {
+				let at = (index + usize::from(*offset)).saturating_sub(self.bone_tables.len()) * 2;
+				self.bone_table_indices
+					.get(at..at + usize::from(*size))
+					.unwrap_or_default()
+			}
+			None => &[],
+		}
+	}
+
 	/// The null-terminated name at `offset` into the shared string buffer, which is how every table
 	/// of names in the file points at one.
 	pub fn string(&self, offset: u32) -> crate::error::Result<String> {
@@ -376,7 +396,7 @@ pub struct Mesh {
 	pub material_index: u16,
 	pub sub_mesh_index: u16,
 	pub sub_mesh_count: u16,
-	bone_table_index: u16,
+	pub bone_table_index: u16,
 	pub start_index: u32,
 	// TODO: the 3 here is the no. of streams
 	pub vertex_buffer_offset: [u32; 3],
@@ -423,7 +443,7 @@ struct TerrainShadowSubmesh {
 #[binread]
 #[br(little, import(version: u32))]
 #[derive(Debug)]
-enum BoneTable {
+pub enum BoneTable {
 	#[br(pre_assert(version == VERSION_5))]
 	Inline {
 		bone_index: [u16; 64],
@@ -590,7 +610,7 @@ mod test {
 					body.extend(count.to_le_bytes());
 					offset += count.next_multiple_of(2) / 2;
 				}
-				body.extend(vec![0; usize::from(table_indices) * 2]);
+				body.extend((0..table_indices).flat_map(u16::to_le_bytes));
 			}
 
 			body.extend(vec![0; usize::from(self.shape_count) * 16]);
@@ -649,6 +669,9 @@ mod test {
 			file.bone_tables[1],
 			super::BoneTable::Span { offset: 4, size: 8 }
 		));
+		assert_eq!(file.bone_table(0), [0, 1, 2]);
+		assert_eq!(file.bone_table(1), [4, 5, 6, 7, 8, 9, 10, 11]);
+		assert_eq!(file.bone_table(2), [12]);
 	}
 
 	/// The version before it holds a fixed 132 byte table each, with no shared array.

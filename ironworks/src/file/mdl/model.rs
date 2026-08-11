@@ -58,6 +58,16 @@ impl Model {
 			.collect()
 	}
 
+	/// The bones the model is skinned to, in the order a mesh's
+	/// [`bone_table`](super::Mesh::bone_table) indexes them. The names are a skeleton's own.
+	pub fn bone_names(&self) -> Result<Vec<String>> {
+		self.file
+			.bone_name_offsets
+			.iter()
+			.map(|offset| self.file.string(*offset))
+			.collect()
+	}
+
 	/// The names a submesh's [`attributes`](super::Submesh::attributes) mask picks out of, in the
 	/// order its bits run.
 	pub fn attribute_names(&self) -> Result<Vec<String>> {

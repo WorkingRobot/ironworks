@@ -25,7 +25,14 @@ pub struct Mesh {
 }
 
 impl Mesh {
-	// TODO: bones
+	/// Which of the model's [`bone_names`](super::Model::bone_names) this mesh's blend indices
+	/// name, in the order they index. Empty for a mesh that names no table, as an unskinned one
+	/// does.
+	pub fn bone_table(&self) -> &[u16] {
+		self.file.bone_table(usize::from(
+			self.file.meshes[self.mesh_index].bone_table_index,
+		))
+	}
 
 	/// What the model draws this mesh for. A mesh listed in more than one of the lod's ranges
 	/// carries every kind that names it.
