@@ -26,6 +26,11 @@ pub struct Model {
 }
 
 impl Model {
+	/// Whether the engine may sway this model with the wind.
+	pub fn waving(&self) -> bool {
+		self.file.waving_animation()
+	}
+
 	// TODO: Expose mesh kinds
 	// TODO: Maybe mesh filter?
 	// TODO: iterator?

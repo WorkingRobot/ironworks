@@ -189,6 +189,11 @@ fn current_position<R: Read + Seek>(reader: &mut R, _: Endian, _: ()) -> BinResu
 }
 
 impl File {
+	/// Whether the engine may sway this model with the wind. The header states it as a disable.
+	pub fn waving_animation(&self) -> bool {
+		!self.flags1.waving_animation_disabled()
+	}
+
 	/// The bones one table names, as indices into [`Self::bone_name_offsets`]. A span states its
 	/// position in 4 byte units from its own entry, and the shared array follows the entries.
 	pub fn bone_table(&self, index: usize) -> &[u16] {
