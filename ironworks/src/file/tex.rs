@@ -54,13 +54,23 @@ pub struct Texture {
 	data: Vec<u8>,
 }
 
-const HEADER_SIZE: u32 = 80;
-
 impl Texture {
+	/// How many bytes of metadata precede the first mipmap.
+	pub const HEADER_SIZE: u32 = 80;
+
 	/// Dimensions of a mipmap level. Each level halves, stopping at one pixel.
 	pub fn mip_size(&self, level: u8) -> (u16, u16) {
 		let shift = u32::from(level).min(u16::BITS - 1);
 		((self.width >> shift).max(1), (self.height >> shift).max(1))
+	}
+
+	/// Where a mipmap level's pixels begin, counted from the start of the file, or `None` past the
+	/// last level the file holds.
+	pub fn mip_offset(&self, level: u8) -> Option<u32> {
+		if level >= self.mip_levels {
+			return None;
+		}
+		self.surface_offsets.get(usize::from(level)).copied()
 	}
 
 	/// Pixel data for a single mipmap level, or `None` if the file does not have that level.
@@ -70,7 +80,7 @@ impl Texture {
 		}
 		let offset = |level: u8| -> Option<usize> {
 			let raw = *self.surface_offsets.get(usize::from(level))?;
-			raw.checked_sub(HEADER_SIZE).map(|o| o as usize)
+			raw.checked_sub(Self::HEADER_SIZE).map(|o| o as usize)
 		};
 		let start = offset(level)?;
 		// The next level's offset bounds this one; the last runs to the end of the data.

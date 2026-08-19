@@ -7,7 +7,7 @@ pub use command::{Command, CommandKind};
 use std::io::{Read, Seek, SeekFrom};
 
 use binrw::{BinRead, BinResult, Endian, VecArgs, binread};
-use getset::CopyGetters;
+use getset::{CopyGetters, Getters};
 
 use crate::{FileStream, error::Result};
 
@@ -264,6 +264,82 @@ pub struct Condition {
 	float: f32,
 }
 
+/// What one curve of a set drives. The tags run `@ABCDE` then skip `F` for `GHI`, and the slot `F`
+/// would take never appears in a file the game ships.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+	TranslationX,
+	TranslationY,
+	TranslationZ,
+	/// In degrees.
+	RotationX,
+	RotationY,
+	RotationZ,
+	ScaleX,
+	ScaleY,
+	ScaleZ,
+}
+
+impl Channel {
+	fn of(tag: u8) -> Option<Self> {
+		Some(match tag {
+			b'@' => Self::TranslationX,
+			b'A' => Self::TranslationY,
+			b'B' => Self::TranslationZ,
+			b'C' => Self::RotationX,
+			b'D' => Self::RotationY,
+			b'E' => Self::RotationZ,
+			b'G' => Self::ScaleX,
+			b'H' => Self::ScaleY,
+			b'I' => Self::ScaleZ,
+			_ => return None,
+		})
+	}
+}
+
+/// One point along a curve.
+#[derive(Debug, Clone, Copy, CopyGetters)]
+#[get_copy = "pub"]
+pub struct Key {
+	pub(super) time: f32,
+	pub(super) value: f32,
+}
+
+/// One curve of a set: the channel it drives and the keys along it.
+#[derive(Debug, Clone, Getters, CopyGetters)]
+pub struct Curve {
+	#[get_copy = "pub"]
+	channel: Channel,
+
+	#[getset(skip)]
+	keys: Vec<Key>,
+}
+
+impl Curve {
+	/// The keys, ascending by time.
+	pub fn keys(&self) -> &[Key] {
+		&self.keys
+	}
+
+	/// What the curve reads at a time, held at its ends and straight between its keys.
+	pub fn at(&self, time: f32) -> Option<f32> {
+		let last = self.keys.last()?;
+		if time >= last.time {
+			return Some(last.value);
+		}
+		let first = self.keys.first()?;
+		if time <= first.time {
+			return Some(first.value);
+		}
+		let at = self.keys.windows(2).find(|pair| time < pair[1].time)?;
+		let span = at[1].time - at[0].time;
+		Some(match span > 0.0 {
+			true => at[0].value + (at[1].value - at[0].value) * (time - at[0].time) / span,
+			false => at[0].value,
+		})
+	}
+}
+
 /// `TMFC`: a set of f-curves, named by id from the movement and camera commands they drive.
 #[binread]
 #[br(little, import(base: u64))]
@@ -290,16 +366,18 @@ pub struct Curves {
 
 	#[br(parse_with = offset_curves, args(base, curve_offset, curve_count))]
 	#[getset(skip)]
-	curves: Vec<[u8; 16]>,
+	curves: Vec<Curve>,
 }
 
 impl Curves {
-	/// The curves, uninterpreted.
-	///
-	/// Each is 16 bytes and names its own keyframes, but the two encodings that ship disagree on
-	/// how, so the keyframes themselves are not reached.
-	pub fn curves(&self) -> &[[u8; 16]] {
+	/// The curves of the set, in the order it lists them.
+	pub fn curves(&self) -> &[Curve] {
 		&self.curves
+	}
+
+	/// The curve driving one channel, where the set holds one.
+	pub fn channel(&self, held: Channel) -> Option<&Curve> {
+		self.curves.iter().find(|curve| curve.channel == held)
 	}
 }
 
@@ -542,7 +620,7 @@ fn offset_curves<R: Read + Seek>(
 	reader: &mut R,
 	endian: Endian,
 	(base, offset, count): (u64, i32, u32),
-) -> BinResult<Vec<[u8; 16]>> {
+) -> BinResult<Vec<Curve>> {
 	if offset == 0 {
 		return Ok(Vec::new());
 	}
@@ -551,7 +629,7 @@ fn offset_curves<R: Read + Seek>(
 	let start = resolve(reader, base + 4, offset, u64::from(count) * 16)?;
 	let resume = reader.stream_position()?;
 	reader.seek(SeekFrom::Start(start))?;
-	let records = Vec::read_options(
+	let records = Vec::<[u8; 16]>::read_options(
 		reader,
 		endian,
 		VecArgs {
@@ -559,8 +637,40 @@ fn offset_curves<R: Read + Seek>(
 			inner: (),
 		},
 	)?;
+
+	// Each record names its keys from its own start rather than from the region's, and the keys lie
+	// contiguously behind the table.
+	let mut curves = Vec::new();
+	for (index, record) in records.iter().enumerate() {
+		let Some(channel) = Channel::of(record[4]) else {
+			continue;
+		};
+		let at = i32::from_le_bytes([record[8], record[9], record[10], record[11]]);
+		let keys = u32::from_le_bytes([record[12], record[13], record[14], record[15]]);
+		if at == 0 || keys == 0 {
+			continue;
+		}
+		let held = start + index as u64 * 16;
+		let Ok(from) = u64::try_from(held as i64 + i64::from(at)) else {
+			continue;
+		};
+		reader.seek(SeekFrom::Start(from))?;
+		let mut along = Vec::with_capacity(keys as usize);
+		for _ in 0..keys {
+			let held = <[u8; 24]>::read_options(reader, endian, ())?;
+			let float = |at: usize| f32::from_le_bytes([held[at], held[at + 1], held[at + 2], held[at + 3]]);
+			along.push(Key {
+				time: float(4),
+				value: float(12),
+			});
+		}
+		curves.push(Curve {
+			channel,
+			keys: along,
+		});
+	}
 	reader.seek(SeekFrom::Start(resume))?;
-	Ok(records)
+	Ok(curves)
 }
 
 fn invalid(pos: u64, message: String) -> binrw::Error {

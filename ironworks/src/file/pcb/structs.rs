@@ -43,8 +43,9 @@ pub struct Primitive {
 	#[br(temp, if(width == MaterialWidth::Wide, 0))]
 	wide_material: u64,
 
-	/// Mask the game filters collision against, so that a surface can be solid to some things and
-	/// not others.
+	/// What the surface is made of, and what the game filters collision against so that a surface
+	/// can be solid to some things and not others. The low byte is the material, which is what the
+	/// footstep a character makes on it is chosen by; the flags sit above it.
 	#[br(calc = match width {
 		MaterialWidth::Narrow => u64::from(narrow_material),
 		MaterialWidth::Wide => wide_material,
