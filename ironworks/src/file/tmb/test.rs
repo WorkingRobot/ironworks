@@ -2,7 +2,7 @@ use std::io::{self, Cursor};
 
 use crate::{error::Error, file::File};
 
-use super::{CommandKind, Item, Layout, Timeline};
+use super::{Channel, CommandKind, Curve, Item, Layout, Timeline};
 
 /// Builds a timeline, laying the items out contiguously and everything they point at into a shared
 /// pool after them.
@@ -382,8 +382,19 @@ fn curves_are_reached_four_bytes_past_the_usual_base() {
 	let mut build = Builder::default();
 	let curves = build.pool(&{
 		let mut bytes = vec![0xEE; 4];
-		bytes.extend([1; 16]);
-		bytes.extend([2; 16]);
+		for (tag, at) in [(b'@', 32i32), (b'A', 40)] {
+			bytes.extend([0; 4]);
+			bytes.extend([tag, 0, 0, 0]);
+			bytes.extend(at.to_le_bytes());
+			bytes.extend(1u32.to_le_bytes());
+		}
+		for (time, value) in [(0.0f32, 1.5f32), (2.0, -3.0)] {
+			bytes.extend([0; 4]);
+			bytes.extend(time.to_le_bytes());
+			bytes.extend([0; 4]);
+			bytes.extend(value.to_le_bytes());
+			bytes.extend([0; 8]);
+		}
 		bytes
 	});
 
@@ -406,7 +417,10 @@ fn curves_are_reached_four_bytes_past_the_usual_base() {
 		panic!("not a curve set")
 	};
 	assert_eq!((found.id(), found.unknown_a(), found.end()), (2, 1, 36));
-	assert_eq!(found.curves(), [[1; 16], [2; 16]]);
+	let channels: Vec<Channel> = found.curves().iter().map(Curve::channel).collect();
+	assert_eq!(channels, [Channel::TranslationX, Channel::TranslationY]);
+	assert_eq!(found.curves()[0].keys()[0].value(), 1.5);
+	assert_eq!(found.curves()[1].keys()[0].time(), 2.0);
 }
 
 #[test]
