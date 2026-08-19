@@ -5,6 +5,7 @@ use getset::CopyGetters;
 ///
 /// Every mesh the game still references writes the wide form, and the narrow files are orphaned
 /// pre-repack assets. A mesh whose nodes each hold a single primitive reads the same either way.
+/// [`Collision::read`](super::Collision::read) picks between them off the node extents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaterialWidth {
 	/// Eight bytes, for a primitive twelve bytes long.
@@ -12,6 +13,30 @@ pub enum MaterialWidth {
 
 	/// Two bytes, for a primitive six bytes long.
 	Narrow,
+}
+
+/// What a surface is made of, out of the low byte of a collision material.
+///
+/// The words are the game's own, out of the footstep bank a character's step is picked from. `None`
+/// for the zero that stands for no material, and for an id nothing the game ships names.
+pub fn surface(material: u64) -> Option<&'static str> {
+	Some(match material & 0xff {
+		1 => "dart",
+		2 => "grass",
+		3 => "sand",
+		4 => "stone",
+		5 => "wood",
+		6 => "metal",
+		7 => "gravel",
+		8 => "leaf",
+		9 => "powder",
+		10 => "carpet",
+		11 => "snow",
+		12 | 13 => "water",
+		14 => "mesh",
+		15 => "sticky",
+		_ => return None,
+	})
 }
 
 /// An axis-aligned bounding box.
@@ -33,8 +58,7 @@ pub struct Primitive {
 	/// The triangle's corners, as positions in the node's vertices.
 	indices: [u8; 3],
 
-	/// Both references read this byte as padding, but it carries a value in a small number of
-	/// primitives.
+	/// Both references read this byte as padding, but the narrow form writes to it.
 	unknown_a: u8,
 
 	#[br(temp, if(width == MaterialWidth::Narrow, 0))]

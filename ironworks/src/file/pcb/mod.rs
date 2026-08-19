@@ -7,7 +7,7 @@ mod structs;
 pub use {
 	list::{MeshList, MeshListEntry},
 	mesh::{Mesh, Node},
-	structs::{BoundingBox, MaterialWidth, Primitive},
+	structs::{BoundingBox, MaterialWidth, Primitive, surface},
 };
 
 use std::io::Cursor;
@@ -46,10 +46,7 @@ impl File for Collision {
 
 		let header = structs::Header::read(&mut Cursor::new(&bytes))?;
 		if header.kind == 0 && bytes.len() != MeshList::EMPTY_SIZE {
-			return Ok(Self::Mesh(
-				Mesh::parse(&bytes, MaterialWidth::Wide)
-					.or_else(|_| Mesh::parse(&bytes, MaterialWidth::Narrow))?,
-			));
+			return Ok(Self::Mesh(Mesh::parse(&bytes, mesh::width_of(&bytes))?));
 		}
 		Ok(Self::List(<MeshList as BinRead>::read(&mut Cursor::new(
 			&bytes,

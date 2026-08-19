@@ -20,8 +20,8 @@ pub struct Mesh {
 }
 
 impl Mesh {
-	/// Read a mesh whose primitives carry a material mask of the given width. [`File::read`] uses
-	/// [`MaterialWidth::Wide`], which is the form every referenced mesh is written in.
+	/// Read a mesh whose primitives carry a material mask of the given width. [`File::read`] reads
+	/// the width off the node extents instead.
 	pub fn read_with(mut stream: impl FileStream, width: MaterialWidth) -> Result<Self> {
 		let mut bytes = Vec::new();
 		stream.read_to_end(&mut bytes)?;
@@ -63,8 +63,94 @@ impl Mesh {
 }
 
 impl File for Mesh {
-	fn read(stream: impl FileStream) -> Result<Self> {
-		Self::read_with(stream, MaterialWidth::Wide)
+	fn read(mut stream: impl FileStream) -> Result<Self> {
+		let mut bytes = Vec::new();
+		stream.read_to_end(&mut bytes)?;
+		Self::parse(&bytes, width_of(&bytes))
+	}
+}
+
+/// Bytes a node spends before its vertices.
+const NODE: usize = 0x30;
+
+fn u16_at(bytes: &[u8], at: usize) -> Option<usize> {
+	Some(usize::from(u16::from_le_bytes(
+		bytes.get(at..at + 2)?.try_into().ok()?,
+	)))
+}
+
+fn i32_at(bytes: &[u8], at: usize) -> Option<i32> {
+	Some(i32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
+/// Where one node's triangles start and how many of them there are, read without knowing how wide
+/// each of them is written.
+struct Extent {
+	start: usize,
+	geometry: usize,
+	primitives: usize,
+}
+
+fn extents(bytes: &[u8], start: usize, into: &mut Vec<Extent>, budget: &mut u32) -> Option<()> {
+	*budget = budget.checked_sub(1)?;
+	let compressed = u16_at(bytes, start + 0x28)?;
+	let primitives = u16_at(bytes, start + 0x2a)?;
+	let raw = u16_at(bytes, start + 0x2c)?;
+	into.push(Extent {
+		start,
+		geometry: start + NODE + raw * 12 + compressed * 6,
+		primitives,
+	});
+	for at in [start + 8, start + 12] {
+		let offset = i32_at(bytes, at)?;
+		if offset != 0 {
+			let child = start.checked_add(usize::try_from(offset).ok()?)?;
+			extents(bytes, child, into, budget)?;
+		}
+	}
+	Some(())
+}
+
+/// Which width a mesh's primitives are written at, off the room each node leaves its triangles.
+///
+/// A node's geometry runs up to the next node in the file, so a width that overruns that is not the
+/// one the mesh was written at. Nodes are padded apart by a run of zeroes long enough to hold the
+/// difference, so where both widths fit, the wide reading is the one that makes a triangle with no
+/// corners out of that padding.
+pub(super) fn width_of(bytes: &[u8]) -> MaterialWidth {
+	let mut budget = i32_at(bytes, 8)
+		.and_then(|count| u32::try_from(count).ok())
+		.unwrap_or(0)
+		.saturating_add(1);
+	let mut held = Vec::new();
+	if extents(bytes, structs::Header::SIZE, &mut held, &mut budget).is_none() {
+		return MaterialWidth::Wide;
+	}
+
+	let mut starts: Vec<usize> = held.iter().map(|extent| extent.start).collect();
+	starts.sort_unstable();
+	let limit = |extent: &Extent| {
+		starts
+			.get(starts.partition_point(|&start| start <= extent.start))
+			.copied()
+			.unwrap_or(bytes.len())
+	};
+
+	let wide = held
+		.iter()
+		.all(|extent| extent.geometry + extent.primitives * 12 <= limit(extent));
+	let blank = held.iter().any(|extent| {
+		(0..extent.primitives).any(|at| {
+			let start = extent.geometry + at * 12;
+			bytes
+				.get(start..start + 12)
+				.is_some_and(|held| held.iter().all(|byte| *byte == 0))
+		})
+	});
+
+	match wide && !blank {
+		true => MaterialWidth::Wide,
+		false => MaterialWidth::Narrow,
 	}
 }
 
@@ -294,15 +380,37 @@ mod test {
 	fn reads_either_material_width() {
 		let mut narrow = header(0, 1);
 		narrow.extend(leaf(MaterialWidth::Narrow));
-		let file = Mesh::read_with(Cursor::new(narrow.clone()), MaterialWidth::Narrow).unwrap();
+		let file = Mesh::read(Cursor::new(narrow.clone())).unwrap();
 		assert_eq!(file.root().primitives()[0].material(), 0x7004);
 		assert_eq!(file.root().primitives()[0].unknown_a(), 0x20);
 
 		// The wide reading of the same bytes runs past the end of the file.
 		assert!(matches!(
-			Mesh::read(Cursor::new(narrow)),
+			Mesh::read_with(Cursor::new(narrow), MaterialWidth::Wide),
 			Err(Error::Resource(_))
 		));
+	}
+
+	/// Where a node's padding is long enough to hold the primitives a wide reading would take from
+	/// it, the padding being blank is what tells the two apart.
+	#[test]
+	fn reads_a_narrow_node_the_wide_width_would_fit_inside() {
+		let mut bytes = header(0, 2);
+		bytes.extend(node(
+			(0, 0),
+			UNIT,
+			&TRIANGLE,
+			&[],
+			&[([0, 1, 2], 0x7004), ([2, 1, 0], 0x7002)],
+			MaterialWidth::Narrow,
+		));
+		bytes.extend([0; 12]);
+
+		let file = Mesh::read(Cursor::new(bytes)).unwrap();
+		let primitives = file.root().primitives();
+		assert_eq!(primitives.len(), 2);
+		assert_eq!(primitives[1].indices(), [2, 1, 0]);
+		assert_eq!(primitives[1].material(), 0x7002);
 	}
 
 	/// The client reads version 4 the way it reads 1, and nothing describes the legacy zero.
@@ -326,7 +434,7 @@ mod test {
 	fn rejects_a_truncated_node() {
 		let mut bytes = header(0, 1);
 		bytes.extend(leaf(MaterialWidth::Wide));
-		bytes.truncate(bytes.len() - 4);
+		bytes.truncate(bytes.len() - 16);
 		assert!(matches!(
 			Mesh::read(Cursor::new(bytes)),
 			Err(Error::Resource(_))
