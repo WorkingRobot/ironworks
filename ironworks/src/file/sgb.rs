@@ -50,7 +50,6 @@ mod test {
 		bytes.extend(1u32.to_le_bytes());
 		bytes.resize(bytes.len() + pad, 0);
 
-		let at = bytes.len();
 		bytes.extend(*b"SCN1");
 		bytes.extend(0u32.to_le_bytes());
 		// The older files put two empty fields ahead of the body.

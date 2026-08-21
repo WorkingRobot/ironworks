@@ -657,11 +657,13 @@ fn offset_curves<R: Read + Seek>(
 		let count = u32::from_le_bytes([record[12], record[13], record[14], record[15]]);
 		let held = start + index as u64 * 16;
 
+		let from = match at != 0 && count != 0 {
+			true => u64::try_from(held as i64 + i64::from(at)).ok(),
+			false => None,
+		};
+
 		let mut keys = Vec::new();
-		if at != 0
-			&& count != 0
-			&& let Ok(from) = u64::try_from(held as i64 + i64::from(at))
-		{
+		if let Some(from) = from {
 			reader.seek(SeekFrom::Start(from))?;
 			keys.reserve(count as usize);
 			for _ in 0..count {
