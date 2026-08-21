@@ -44,44 +44,20 @@ pub struct ColorParameters {
 	eyes: [Color; 256],
 	hair_highlights: [Color; 256],
 
-	#[getset(skip)]
-	lips_dark: [Color; 128],
-
-	#[getset(skip)]
-	face_paint_dark: [Color; 128],
+	/// The creator offers this as a dark run and a light one, which hold the same colours twice:
+	/// the light half starts at 128 and states the lower alpha, dark and light being how heavily
+	/// the colour is worn rather than what colour it is.
+	lips: [Color; 256],
 
 	features: [Color; 256],
 
-	#[getset(skip)]
-	lips_light: [Color; 128],
-
-	#[getset(skip)]
-	face_paint_light: [Color; 128],
+	/// Split into halves like [`lips`](Self::lips).
+	face_paint: [Color; 256],
 
 	unused_eyes_a: [Color; 256],
 	unused_eyes_b: [Color; 256],
 	unused_eyes_c: [Color; 256],
 	unused_features: [Color; 256],
-}
-
-impl ColorParameters {
-	/// The lip colour an index names. The dark and light halves are indexed as one run of 256, the
-	/// light half starting at 128.
-	pub fn lips(&self, index: usize) -> Option<Color> {
-		half(&self.lips_dark, &self.lips_light, index)
-	}
-
-	/// The face paint colour an index names, split into halves like [`lips`](Self::lips).
-	pub fn face_paint(&self, index: usize) -> Option<Color> {
-		half(&self.face_paint_dark, &self.face_paint_light, index)
-	}
-}
-
-fn half(dark: &[Color; 128], light: &[Color; 128], index: usize) -> Option<Color> {
-	match index.checked_sub(dark.len()) {
-		Some(index) => light.get(index).copied(),
-		None => dark.get(index).copied(),
-	}
 }
 
 /// The colours available to one clan and gender.
@@ -165,17 +141,13 @@ mod test {
 
 	use super::{CharacterMakeParameters, Color, SIZE};
 
-	/// A file with every colour set to its own offset within the block it sits in, so a field reading
-	/// from the wrong place shows up as the wrong value rather than as zero.
+	/// A file with every colour set to its own offset, so a field reading from the wrong place shows
+	/// up as the wrong value rather than as zero.
 	fn parameters() -> Vec<u8> {
 		let colors = |count: usize| (0..count).flat_map(|index| color(index).to_vec());
 
-		let block = || -> Vec<u8> {
-			[256, 256, 128, 128, 256, 128, 128, 256, 256, 256, 256]
-				.into_iter()
-				.flat_map(colors)
-				.collect()
-		};
+		// One run across all nine blocks, so a field reading from the wrong one reads the wrong value.
+		let block = || -> Vec<u8> { colors(256 * 9).collect() };
 
 		let mut bytes = Vec::new();
 		bytes.extend(block());
@@ -244,9 +216,11 @@ mod test {
 		let file = CharacterMakeParameters::read(Cursor::new(parameters())).unwrap();
 
 		assert_eq!(file.colors().eyes()[255], at(255));
-		assert_eq!(file.colors().hair_highlights()[0], at(0));
-		assert_eq!(file.colors().features()[128], at(128));
-		assert_eq!(file.colors().unused_features()[255], at(255));
+		assert_eq!(file.colors().hair_highlights()[0], at(256));
+		assert_eq!(file.colors().lips()[255], at(767));
+		assert_eq!(file.colors().features()[128], at(896));
+		assert_eq!(file.colors().face_paint()[0], at(1024));
+		assert_eq!(file.colors().unused_features()[255], at(2303));
 		assert_eq!(file.interface_colors().eyes()[12], at(12));
 
 		let clan = &file.races()[31];
@@ -260,21 +234,5 @@ mod test {
 		assert_eq!(scale.female_max_tail().to_bits(), 717);
 		assert_eq!(scale.bust_min().map(f32::to_bits), [718, 719, 720]);
 		assert_eq!(scale.bust_max().map(f32::to_bits), [721, 722, 723]);
-	}
-
-	/// Lip and face paint indices run across the dark half into the light one.
-	#[test]
-	fn lips_and_face_paint_span_both_halves() {
-		let file = CharacterMakeParameters::read(Cursor::new(parameters())).unwrap();
-		let colors = file.colors();
-
-		assert_eq!(colors.lips(0), Some(at(0)));
-		assert_eq!(colors.lips(127), Some(at(127)));
-		assert_eq!(colors.lips(128), Some(at(0)));
-		assert_eq!(colors.lips(255), Some(at(127)));
-		assert_eq!(colors.lips(256), None);
-
-		assert_eq!(colors.face_paint(128), Some(at(0)));
-		assert_eq!(colors.face_paint(256), None);
 	}
 }
