@@ -62,7 +62,7 @@ macro_rules! inline {
 	};
 }
 
-inline!(u8 i16 u16 i32 u32 f32 [f32; 2] [f32; 3] [u32; 17]);
+inline!(u8 i16 u16 i32 u32 f32 [f32; 2] [f32; 3] [f32; 4] [u32; 17]);
 
 impl Field for Option<String> {
 	fn read<R: Read + Seek>(reader: &mut R, endian: Endian, base: u64) -> BinResult<Self> {
@@ -235,6 +235,26 @@ commands! {
 	/// Weapon size.
 	C015 { duration: i32, unknown_2: i32, weapon_size: i32, object_control: i32 }
 
+	/// A transform to hold a node at, in the space the scene places that node in.
+	C018 {
+		duration: i32,
+		unknown_1: i32,
+		translation: [f32; 3],
+		/// In radians, as an instance's own rotation is.
+		rotation: [f32; 3],
+		/// One in every file the game ships.
+		scale: [f32; 3],
+	}
+
+	/// Not named by any reference implementation. A scene runs it against every kind of node it
+	/// places.
+	C019 {
+		duration: i32,
+		unknown_1: i32,
+		/// Zero or one in each of its two low bytes.
+		unknown_2: i32,
+	}
+
 	/// Not named by any reference implementation.
 	C021 { unknown_1: i32, unknown_2: i32, unknown_3: i32, unknown_4: i32 }
 
@@ -271,6 +291,21 @@ commands! {
 		flags: i16,
 	}
 
+	/// Not named by any reference implementation. A scene runs it against a collision box.
+	C055 { duration: i32, unknown_1: i32, enabled: i32, unknown_3: i32 }
+
+	/// Not named by any reference implementation. A scene runs it against a sound.
+	C056 { duration: i32, unknown_1: i32, unknown_2: f32 }
+
+	/// Not named by any reference implementation. A scene runs it against a sound.
+	C057 { duration: i32, unknown_1: i32, unknown_2: f32 }
+
+	/// Not named by any reference implementation. A scene runs it against a visual effect.
+	C058 { duration: i32, unknown_1: i32, unknown_2: f32, unknown_3: i32 }
+
+	/// Not named by any reference implementation. A scene runs it against a visual effect.
+	C059 { duration: i32, unknown_1: i32, unknown_2: i32 }
+
 	/// Plays a sound.
 	C063 {
 		loop_duration: i32,
@@ -306,6 +341,9 @@ commands! {
 		unknown_3: i32,
 		unknown_4: i32,
 	}
+
+	/// Not named by any reference implementation. A scene runs it against a shared group.
+	C082 { duration: i32, unknown_1: i32, unknown_2: i32, unknown_3: i32 }
 
 	/// Not named by any reference implementation.
 	C083 { unknown_1: i32, unknown_2: i32, unknown_3: i32 }
@@ -356,8 +394,38 @@ commands! {
 		unknown_5: i32,
 	}
 
+	/// Not named by any reference implementation. A scene runs it against a model or a shared group.
+	C104 {
+		duration: i32,
+		unknown_1: i32,
+		/// Zero or one in each of its three low bytes.
+		unknown_2: i32,
+	}
+
 	/// Visual effect trigger, by `VFXTrigger` row.
 	C107 { enabled: i32, unknown_2: i32, trigger_row: i32, unknown_4: i32 }
+
+	/// Not named by any reference implementation. A scene runs it against a light.
+	C109 {
+		duration: i32,
+		unknown_1: i32,
+		/// Zero or one in each of its three low bytes.
+		unknown_2: i32,
+	}
+
+	/// Not named by any reference implementation. A scene runs it against a model.
+	C110 {
+		duration: i32,
+		unknown_1: i32,
+		/// Zero or one in each of its two low bytes.
+		unknown_2: i32,
+	}
+
+	/// A colour a scene gives a light it places, carrying the light's intensity in it.
+	C112 { duration: i32, unknown_1: i32, color: [f32; 4] }
+
+	/// A colour a scene gives a model it places.
+	C113 { duration: i32, unknown_1: i32, color: [f32; 4] }
 
 	/// Forced forward movement, driven by an f-curve.
 	C117 { duration: i32, unknown_2: i32, curve_id: i32 }
@@ -376,6 +444,9 @@ commands! {
 
 	/// Animation cancelled by movement.
 	C131 { enabled: i32, unknown_2: i32 }
+
+	/// Not named by any reference implementation.
+	C133 { duration: i32, unknown_1: i32, unknown_2: i32, unknown_3: i32 }
 
 	/// Local wind scale.
 	C136 { unknown_1: i32, unknown_2: i32 }
