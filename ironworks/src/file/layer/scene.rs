@@ -5,7 +5,7 @@ use getset::{CopyGetters, Getters};
 use crate::error::Result;
 use crate::file::{File, tmb};
 
-use super::{LayerGroup, groups, i32_at, invalid, seek, string};
+use super::{Colour, LayerGroup, groups, i32_at, invalid, seek, string};
 
 /// Fields the scene header holds, each an offset from the header's own body.
 const FIELDS: usize = 16;
@@ -29,10 +29,11 @@ const ANIMATED: usize = 8;
 /// Where the animation handler list sits inside the block the header's ninth slot names.
 const HANDLERS: usize = 0x24;
 
-/// The two handler kinds whose bodies are read: a transform the scene repeats forever, and a turn
-/// about one axis it never stops.
+/// The three handler kinds whose bodies are read: a transform the scene repeats forever, a turn
+/// about one axis it never stops, and a colour it cycles a light and a surface through.
 const REPEAT: i32 = 5;
 const SPIN: i32 = 2;
+const GLOW: i32 = 6;
 
 /// An environment the scene applies over part of itself.
 #[derive(Debug, Getters, CopyGetters)]
@@ -159,6 +160,43 @@ pub struct SceneSpin {
 	period: f32,
 }
 
+/// A colour the scene cycles the instances it names through, on top of whatever colour the file
+/// gave them. One lane answers to the models among them and the other to the lights: across the
+/// corpus a record naming only models leaves the light lane off in 349 of 363, and one naming only
+/// lights leaves the surface lane off in 92 of 101.
+#[derive(Debug, Getters, CopyGetters)]
+pub struct SceneGlow {
+	/// The instances of this scene the colour reaches.
+	#[getset(skip)]
+	instances: Vec<u32>,
+
+	#[get_copy = "pub"]
+	surface: Glow,
+
+	#[get_copy = "pub"]
+	light: Glow,
+}
+
+/// One lane of a cycled colour. Ten fields past the ones read here state the shape of the swing and
+/// are left unread: a flag gating a factor, a period, and a second flag gating a second factor.
+#[derive(Debug, Clone, Copy, CopyGetters)]
+#[get_copy = "pub"]
+pub struct Glow {
+	/// Whether the lane runs at all.
+	active: bool,
+
+	/// Whether the two ends below are a colour of the lane's own. A lane that runs and tints nothing
+	/// states white at full strength, and leaves the instance the colour the file gave it.
+	tints: bool,
+
+	from: Colour,
+	to: Colour,
+
+	/// How long the swing from one end to the other takes, in the ticks a scene timeline is keyed
+	/// in.
+	period: u32,
+}
+
 /// One lane of a repeating motion.
 #[derive(Debug, Clone, Copy, CopyGetters)]
 #[get_copy = "pub"]
@@ -237,6 +275,60 @@ impl SceneSpin {
 	}
 }
 
+impl SceneGlow {
+	/// The colours a scene cycles, for a caller that has only an `Option<&Scene>`.
+	pub fn of(scene: &Scene) -> &[Self] {
+		scene.glows()
+	}
+
+	/// Each instance of this scene the colour reaches.
+	pub fn instances(&self) -> &[u32] {
+		&self.instances
+	}
+
+	/// Reads the handler at `at`, or nothing where its kind is one whose body is not read.
+	fn parse(bytes: &[u8], at: usize) -> Result<Option<Self>> {
+		if i32_at(bytes, at)? != GLOW {
+			return Ok(None);
+		}
+		let ids = seek(at, i32_at(bytes, at + 16)?)?;
+		let count = usize::try_from(i32_at(bytes, at + 20)?)
+			.map_err(|_| invalid(format!("a handler at {at:#x} colouring a negative count")))?;
+		let instances = bytes
+			.get(ids..ids.saturating_add(count))
+			.ok_or_else(|| invalid(format!("a handler at {at:#x} reaching past the file")))?
+			.iter()
+			.map(|&held| u32::from(held))
+			.collect();
+		let lane = |slot: usize| Glow::parse(bytes, seek(at, i32_at(bytes, at + 32 + slot * 4)?)?);
+		Ok(Some(Self {
+			instances,
+			surface: lane(0)?,
+			light: lane(1)?,
+		}))
+	}
+}
+
+impl Glow {
+	fn parse(bytes: &[u8], at: usize) -> Result<Self> {
+		// The same eight bytes an instance states its own colour in, which is what says the three
+		// channels are read low byte first.
+		let colour = |offset: usize| -> Result<Colour> {
+			let rest = bytes
+				.get(at + offset..)
+				.ok_or_else(|| invalid(format!("a lane at {at:#x} reaching past the file")))?;
+			Ok(<Colour as binrw::BinRead>::read(&mut Cursor::new(rest))?)
+		};
+		Ok(Self {
+			active: bytes.get(at).is_some_and(|held| *held != 0),
+			tints: bytes.get(at + 1).is_some_and(|held| *held != 0),
+			from: colour(4)?,
+			to: colour(12)?,
+			period: i32_at(bytes, at + 32)? as u32,
+		})
+	}
+}
+
 impl Lane {
 	fn parse(bytes: &[u8], at: usize) -> Result<Self> {
 		let float = |offset| -> Result<f32> {
@@ -307,6 +399,9 @@ pub struct Scene {
 
 	#[getset(skip)]
 	spins: Vec<SceneSpin>,
+
+	#[getset(skip)]
+	glows: Vec<SceneGlow>,
 }
 
 impl Scene {
@@ -338,6 +433,11 @@ impl Scene {
 	/// The turns the scene never stops, in the order it names them.
 	pub fn spins(&self) -> &[SceneSpin] {
 		&self.spins
+	}
+
+	/// The colours the scene cycles its lights and surfaces through, in the order it names them.
+	pub fn glows(&self) -> &[SceneGlow] {
+		&self.glows
 	}
 
 	/// The general block a slot at a time, for a reader that wants what is not named yet.
@@ -411,8 +511,8 @@ impl Scene {
 		};
 
 		// The handlers sit inside a block the ninth slot names, past a table nothing has identified.
-		// A scene that animates nothing still lays the block out, with the count at nought. Doors,
-		// choices and lights are laid out here too, each with a body of its own that nothing reads.
+		// A scene that animates nothing still lays the block out, with the count at nought. Doors
+		// and choices are laid out here too, each with a body of its own that nothing reads.
 		let handlers: Vec<usize> = match offsets[8] > 0 {
 			false => Vec::new(),
 			true => {
@@ -432,6 +532,10 @@ impl Scene {
 		let spins = handlers
 			.iter()
 			.filter_map(|&at| SceneSpin::parse(bytes, at).ok().flatten())
+			.collect();
+		let glows = handlers
+			.iter()
+			.filter_map(|&at| SceneGlow::parse(bytes, at).ok().flatten())
 			.collect();
 
 		let general = seek(body, offsets[2])?;
@@ -472,6 +576,7 @@ impl Scene {
 			timelines,
 			animations,
 			spins,
+			glows,
 		})
 	}
 }
