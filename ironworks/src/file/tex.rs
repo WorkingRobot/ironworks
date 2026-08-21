@@ -73,6 +73,17 @@ impl Texture {
 		self.surface_offsets.get(usize::from(level)).copied()
 	}
 
+	/// The coarsest mipmap level still covering `max_dim` on its longest edge.
+	pub fn level_covering(&self, max_dim: u16) -> u8 {
+		(0..self.mip_levels)
+			.take_while(|level| {
+				let (width, height) = self.mip_size(*level);
+				width.max(height) >= max_dim
+			})
+			.last()
+			.unwrap_or(0)
+	}
+
 	/// Pixel data for a single mipmap level, or `None` if the file does not have that level.
 	pub fn mip_data(&self, level: u8) -> Option<&[u8]> {
 		if level >= self.mip_levels {

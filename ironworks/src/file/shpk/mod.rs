@@ -1,6 +1,7 @@
 //! Structs and utilities for parsing .shpk files.
 
 mod package;
+mod spans;
 mod structs;
 
 pub use {
@@ -9,4 +10,5 @@ pub use {
 		AliasCluster, Key, MaterialParam, NONE, Node, NodeAlias, Pass, Shader, ShaderPackage,
 		Stage, SubCluster,
 	},
+	spans::Spans,
 };
