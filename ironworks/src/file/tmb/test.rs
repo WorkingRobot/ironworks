@@ -461,10 +461,10 @@ fn curves_are_reached_four_bytes_past_the_usual_base() {
 	assert_eq!(found.curves()[1].keys()[0].time(), 2.0);
 }
 
-/// A cutscene camera drives blocks the transform channels do not cover, so a curve outside them
-/// has to survive with its tag rather than be dropped.
+/// A cutscene camera drives channels past the transform ones, so a curve outside them has to
+/// survive with its tag rather than be dropped.
 #[test]
-fn a_curve_outside_the_transform_block_keeps_its_tag() {
+fn a_curve_outside_the_transform_channels_keeps_its_tag() {
 	let mut build = Builder::default();
 	let curves = build.pool(&{
 		let mut bytes = vec![0xEE; 4];
@@ -501,14 +501,15 @@ fn a_curve_outside_the_transform_block_keeps_its_tag() {
 }
 
 /// A span runs as a cubic Hermite over the slopes its two keys carry, unless the key it leaves
-/// says to run straight.
+/// says to run straight. The tag names the channel in its low six bits, so a target past the
+/// first reaches the same component.
 #[test]
 fn a_span_reads_as_a_cubic_unless_its_first_key_says_otherwise() {
 	let mut build = Builder::default();
 	let curves = build.pool(&{
 		let mut bytes = vec![0xEE; 4];
 		bytes.extend([0; 4]);
-		bytes.extend([0x40, 0, 0, 0]);
+		bytes.extend([0x80, 0, 2, 0]);
 		bytes.extend(16i32.to_le_bytes());
 		bytes.extend(3u32.to_le_bytes());
 		for (linear, time, rate, value, into, out) in [
@@ -541,6 +542,8 @@ fn a_span_reads_as_a_cubic_unless_its_first_key_says_otherwise() {
 		panic!("not a curve set")
 	};
 	let curve = &found.curves()[0];
+	assert_eq!(curve.channel(), Some(Channel::TranslationX));
+	assert_eq!(curve.target(), 2);
 	assert!(!curve.keys()[0].linear());
 	assert!(curve.keys()[1].linear());
 

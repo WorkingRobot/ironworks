@@ -266,7 +266,7 @@ pub struct Condition {
 	float: f32,
 }
 
-/// One component of the transform block, which is block four of a curve's tag.
+/// One of the transform channels a target carries, which are the first ten of its forty-eight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
 	TranslationX,
@@ -283,16 +283,16 @@ pub enum Channel {
 
 impl Channel {
 	fn of(tag: u8) -> Option<Self> {
-		Some(match tag {
-			b'@' => Self::TranslationX,
-			b'A' => Self::TranslationY,
-			b'B' => Self::TranslationZ,
-			b'C' => Self::RotationX,
-			b'D' => Self::RotationY,
-			b'E' => Self::RotationZ,
-			b'G' => Self::ScaleX,
-			b'H' => Self::ScaleY,
-			b'I' => Self::ScaleZ,
+		Some(match tag & 0x3F {
+			0 => Self::TranslationX,
+			1 => Self::TranslationY,
+			2 => Self::TranslationZ,
+			3 => Self::RotationX,
+			4 => Self::RotationY,
+			5 => Self::RotationZ,
+			7 => Self::ScaleX,
+			8 => Self::ScaleY,
+			9 => Self::ScaleZ,
 			_ => return None,
 		})
 	}
@@ -413,12 +413,11 @@ impl Curves {
 		&self.curves
 	}
 
-	/// The first curve driving one transform component. A cutscene camera repeats the transform
-	/// block, so the later blocks are only reachable through [`Self::curves`].
-	pub fn channel(&self, held: Channel) -> Option<&Curve> {
+	/// The curve driving one channel of one of the set's targets.
+	pub fn channel(&self, target: u8, held: Channel) -> Option<&Curve> {
 		self.curves
 			.iter()
-			.find(|curve| curve.channel() == Some(held))
+			.find(|curve| curve.target() == target && curve.channel() == Some(held))
 	}
 }
 
