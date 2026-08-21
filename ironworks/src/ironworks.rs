@@ -1,6 +1,7 @@
 use std::{
 	io::{Read, Seek},
 	rc::Rc,
+	sync::Arc,
 };
 
 use derivative::Derivative;
@@ -54,6 +55,20 @@ impl<R: Resource + ?Sized> Resource for Box<R> {
 }
 
 impl<R: Resource + ?Sized> Resource for Rc<R> {
+	fn version(&self, path: &str) -> Result<String> {
+		self.as_ref().version(path)
+	}
+
+	fn file(&self, path: &str) -> Result<Box<dyn FileStream>> {
+		self.as_ref().file(path)
+	}
+
+	fn exists(&self, path: &str) -> Result<bool> {
+		self.as_ref().exists(path)
+	}
+}
+
+impl<R: Resource + ?Sized> Resource for Arc<R> {
 	fn version(&self, path: &str) -> Result<String> {
 		self.as_ref().version(path)
 	}
