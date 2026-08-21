@@ -157,7 +157,7 @@ slot!(
 	}
 );
 
-#[allow(dead_code)]
+#[allow(dead_code, unused_parens)]
 mod bitfield {
 	use modular_bitfield::prelude::*;
 
