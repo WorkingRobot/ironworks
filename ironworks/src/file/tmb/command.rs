@@ -62,7 +62,7 @@ macro_rules! inline {
 	};
 }
 
-inline!(u8 i16 u16 i32 u32 f32 [f32; 2] [f32; 3]);
+inline!(u8 i16 u16 i32 u32 f32 [f32; 2] [f32; 3] [u32; 17]);
 
 impl Field for Option<String> {
 	fn read<R: Read + Seek>(reader: &mut R, endian: Endian, base: u64) -> BinResult<Self> {
@@ -131,9 +131,9 @@ macro_rules! commands {
 			}
 		)*
 
-		/// What a command does, one variant per magic VFXEditor specifies.
+		/// What a command does, one variant per magic this crate models.
 		///
-		/// Field names are VFXEditor's reading of the format rather than a measurement, and the
+		/// Most field names are VFXEditor's reading of the format rather than a measurement, and the
 		/// majority are `unknown_n` there too. The catalogue is open by construction: the observed
 		/// discriminants run `C002`..`C234` with ~170 numeric slots unallocated, so a magic outside
 		/// this set is expected rather than exceptional.
@@ -170,6 +170,21 @@ macro_rules! commands {
 commands! {
 	/// Plays another timeline.
 	C002 { duration: i32, unknown_1: i32, unknown_2: i32, #[getset(skip)] path: Option<String> }
+
+	/// The camera a shot runs through, usable only from a `.cutb`.
+	C004 {
+		duration: i32,
+		unknown_1: i32,
+		/// Id of the `TMFC` holding the camera's curves.
+		curve_id: i32,
+		#[getset(skip)] name: Option<String>,
+		near_plane: f32,
+		far_plane: f32,
+		/// The participants the shot binds to, as `CTAL` ids or `0xffffffff`, interleaved with
+		/// the unnamed fields that go with them. The wider body carries two further pairs, which
+		/// are past what this reads.
+		#[getset(skip)] bindings: [u32; 17],
+	}
 
 	/// Fly text settings.
 	C006 { enabled: i32, unknown_2: i32, unknown_3: i32 }
@@ -648,6 +663,18 @@ vectors! {
 	C068 { color_1 color_2 }
 	C075 { scale rotation position rgba }
 	C093 { color_1 color_2 }
+}
+
+impl C004 {
+	/// What the shot is called.
+	pub fn name(&self) -> Option<&str> {
+		self.name.as_deref()
+	}
+
+	/// The participants and the fields between them, in the order the file writes them.
+	pub fn bindings(&self) -> &[u32; 17] {
+		&self.bindings
+	}
 }
 
 impl C094 {

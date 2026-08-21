@@ -18,14 +18,20 @@ const HEADER: u64 = 12;
 /// Bytes one node table entry takes.
 const ENTRY: u64 = 16;
 
+/// Where a `CTDS` holds the point the cutscene plays around.
+const SCENE_ORIGIN: u64 = 0x10;
+
 /// Where a `CTDS` states how many entries it holds.
 const SCENE_COUNT: u64 = 0x40;
 
 /// Where a `CTDS` starts them.
 const SCENE_ENTRIES: u64 = 0x54;
 
-/// Where a `CTAL` states how many records it holds.
-const RECORD_COUNT: u64 = 0x0C;
+/// Where a `CTAL` reaches the records it holds, ahead of their count.
+const PARTICIPANT_TABLE: u64 = 0x08;
+
+/// Where a `CTAL` record's unmodelled body starts, past its id and its transform.
+const PARTICIPANT_BODY: u64 = 0x30;
 
 fn invalid(reason: impl Into<String>) -> Error {
 	Error::Invalid(ErrorValue::Other("cutscene".into()), reason.into())
@@ -47,6 +53,10 @@ fn region(bytes: &[u8], at: u64, size: u64) -> Result<&[u8]> {
 
 fn u32_at(bytes: &[u8], at: u64) -> Result<u32> {
 	region(bytes, at, 4).map(|raw| u32::from_le_bytes(raw.try_into().unwrap()))
+}
+
+fn f32_at(bytes: &[u8], at: u64) -> Result<f32> {
+	region(bytes, at, 4).map(|raw| f32::from_le_bytes(raw.try_into().unwrap()))
 }
 
 /// Where the offset at `field` reaches, which the format writes from the field itself.
@@ -120,8 +130,8 @@ pub enum Node {
 	/// `CTDS`: the level the cutscene plays in, and what it drives there.
 	Scene(Scene),
 
-	/// `CTAL`: records the node's own offset table partitions. Their fields are not modelled.
-	Records(Vec<Vec<u8>>),
+	/// `CTAL`: the participants the cutscene drives.
+	Participants(Vec<Participant>),
 
 	/// `CTPA`: groups of twelve-byte records. Their fields are not modelled.
 	Groups(Vec<Group>),
@@ -151,9 +161,12 @@ impl Resource {
 }
 
 /// `CTDS`: the level a cutscene plays in, and what it drives there.
-#[derive(Debug)]
+#[derive(Debug, CopyGetters)]
 pub struct Scene {
 	level: String,
+
+	#[get_copy = "pub"]
+	origin: [f32; 3],
 
 	entries: Vec<[u32; 2]>,
 }
@@ -167,6 +180,33 @@ impl Scene {
 	/// The pairs of ids the cutscene drives, which this crate does not name.
 	pub fn entries(&self) -> &[[u32; 2]] {
 		&self.entries
+	}
+}
+
+/// `CTAL`: one participant of a cutscene, which the timelines name by [`Self::id`].
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct Participant {
+	kind: u32,
+
+	/// What a timeline's actors and cameras reach the participant by.
+	id: u32,
+
+	position: [f32; 3],
+
+	/// In radians.
+	rotation: [f32; 3],
+
+	scale: [f32; 3],
+
+	#[getset(skip)]
+	body: Vec<u8>,
+}
+
+impl Participant {
+	/// Everything the record holds past its transform, which this crate does not model.
+	pub fn body(&self) -> &[u8] {
+		&self.body
 	}
 }
 
@@ -224,7 +264,7 @@ fn node(bytes: &[u8], entry: u64) -> Result<Node> {
 		b"CTRL" => Node::Resources(resources(bytes, at)?),
 		b"CTIS" => Node::Sheet(string(bytes, at + u64::from(u32_at(bytes, at)?))?),
 		b"CTDS" => Node::Scene(scene(bytes, at)?),
-		b"CTAL" => Node::Records(records(bytes, at, size)?),
+		b"CTAL" => Node::Participants(participants(bytes, at, size)?),
 		b"CTPA" => Node::Groups(groups(bytes, at)?),
 		// Read over the node alone, so an offset inside the timeline cannot reach another node.
 		b"CTTL" => Node::Timeline(<Timeline as BinRead>::read(&mut Cursor::new(body))?),
@@ -263,15 +303,28 @@ fn scene(bytes: &[u8], at: u64) -> Result<Scene> {
 			Ok([u32_at(bytes, record)?, u32_at(bytes, record + 4)?])
 		})
 		.collect::<Result<_>>()?;
-	Ok(Scene { level, entries })
+	Ok(Scene {
+		level,
+		origin: floats(bytes, at + SCENE_ORIGIN)?,
+		entries,
+	})
 }
 
-/// Reads the records a `CTAL` names, each running to where the next starts.
+/// The three floats at `at`.
+fn floats(bytes: &[u8], at: u64) -> Result<[f32; 3]> {
+	Ok([
+		f32_at(bytes, at)?,
+		f32_at(bytes, at + 4)?,
+		f32_at(bytes, at + 8)?,
+	])
+}
+
+/// Reads the participants a `CTAL` names, each running to where the next starts.
 ///
 /// The last one's extent is not stated, so it carries the strings the node ends with.
-fn records(bytes: &[u8], at: u64, size: u64) -> Result<Vec<Vec<u8>>> {
-	let table = at + u64::from(u32_at(bytes, at)?);
-	let count = u64::from(u32_at(bytes, at + RECORD_COUNT)?);
+fn participants(bytes: &[u8], at: u64, size: u64) -> Result<Vec<Participant>> {
+	let table = at + u64::from(u32_at(bytes, at + PARTICIPANT_TABLE)?);
+	let count = u64::from(u32_at(bytes, at + PARTICIPANT_TABLE + 4)?);
 	region(bytes, table, count * 4)?;
 
 	let starts = (0..count)
@@ -284,9 +337,16 @@ fn records(bytes: &[u8], at: u64, size: u64) -> Result<Vec<Vec<u8>>> {
 		.map(|(index, start)| {
 			let end = starts.get(index + 1).copied().unwrap_or(at + size);
 			let extent = end
-				.checked_sub(*start)
+				.checked_sub(start + PARTICIPANT_BODY)
 				.ok_or_else(|| invalid(format!("a record at {start:#x} ending at {end:#x}")))?;
-			Ok(region(bytes, *start, extent)?.to_vec())
+			Ok(Participant {
+				kind: u32_at(bytes, *start)?,
+				id: u32_at(bytes, start + 4)?,
+				position: floats(bytes, start + 0x0C)?,
+				rotation: floats(bytes, start + 0x18)?,
+				scale: floats(bytes, start + 0x24)?,
+				body: region(bytes, start + PARTICIPANT_BODY, extent)?.to_vec(),
+			})
 		})
 		.collect()
 }
@@ -375,10 +435,14 @@ mod test {
 		bytes
 	}
 
-	fn scene(level: &str, entries: &[[u32; 2]], extra: &[u32]) -> Vec<u8> {
+	fn scene(level: &str, origin: [f32; 3], entries: &[[u32; 2]], extra: &[u32]) -> Vec<u8> {
 		let heap = 0x54 + entries.len() * 8 + extra.len() * 4;
 		let mut bytes = vec![0; 0x54];
 		bytes[0x00..0x04].copy_from_slice(&u32::try_from(heap).unwrap().to_le_bytes());
+		for (index, axis) in origin.iter().enumerate() {
+			let at = 0x10 + index * 4;
+			bytes[at..at + 4].copy_from_slice(&axis.to_le_bytes());
+		}
 		bytes[0x40..0x44].copy_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
 		let named = 0x54 + entries.len() * 8;
 		bytes[0x48..0x4C].copy_from_slice(&u32::try_from(named).unwrap().to_le_bytes());
@@ -391,7 +455,9 @@ mod test {
 		bytes
 	}
 
-	fn records(records: &[&[u8]]) -> Vec<u8> {
+	fn participants(records: &[(u32, u32, [f32; 3], &[u8])]) -> Vec<u8> {
+		// The first pair the header holds is empty in every file the game ships, and the records
+		// come through the second.
 		let mut bytes = Vec::from(16u32.to_le_bytes());
 		bytes.extend([0; 4]);
 		bytes.extend(16u32.to_le_bytes());
@@ -399,10 +465,16 @@ mod test {
 
 		let mut at = records.len() * 4;
 		let mut bodies: Vec<u8> = Vec::new();
-		for record in records {
+		for (kind, id, position, body) in records {
 			bytes.extend(u32::try_from(at).unwrap().to_le_bytes());
+			let mut record = Vec::from(kind.to_le_bytes());
+			record.extend(id.to_le_bytes());
+			record.resize(0x0C, 0);
+			record.extend(position.iter().flat_map(|axis| axis.to_le_bytes()));
+			record.resize(0x30, 0);
+			record.extend(*body);
 			at += record.len();
-			bodies.extend(*record);
+			bodies.extend(record);
 		}
 
 		bytes.extend(bodies);
@@ -474,10 +546,22 @@ mod test {
 			(b"CTIS", info("quest/023/BanAll110_02382"), None),
 			(
 				b"CTDS",
-				scene("ex1/02_dra_d2/fld/d2f3/level/d2f3", &[[7, 8]], &[]),
+				scene(
+					"ex1/02_dra_d2/fld/d2f3/level/d2f3",
+					[1.0, 2.0, 3.0],
+					&[[7, 8]],
+					&[],
+				),
 				None,
 			),
-			(b"CTAL", records(&[&[1; 12], &[2; 20]]), None),
+			(
+				b"CTAL",
+				participants(&[
+					(15, 0xff00_0001, [4.0, 5.0, 6.0], &[7; 4]),
+					(3, 0xff00_0002, [0.0; 3], &[8; 4]),
+				]),
+				None,
+			),
 			(b"CTPA", groups(&[(0, 2), (1, 0)]), None),
 			(b"CTTL", timeline(&[(b"TMDH", header(480))]), None),
 		])))
@@ -499,14 +583,18 @@ mod test {
 			panic!("expected a scene, got {:?}", nodes[2]);
 		};
 		assert_eq!(scene.level(), "ex1/02_dra_d2/fld/d2f3/level/d2f3");
+		assert_eq!(scene.origin(), [1.0, 2.0, 3.0]);
 		assert_eq!(scene.entries(), [[7, 8]]);
 
-		let Node::Records(records) = &nodes[3] else {
-			panic!("expected records, got {:?}", nodes[3]);
+		let Node::Participants(participants) = &nodes[3] else {
+			panic!("expected participants, got {:?}", nodes[3]);
 		};
-		assert_eq!(records[0], [1; 12]);
+		assert_eq!(participants[0].kind(), 15);
+		assert_eq!(participants[0].id(), 0xff00_0001);
+		assert_eq!(participants[0].position(), [4.0, 5.0, 6.0]);
+		assert_eq!(participants[0].body(), [7; 4]);
 		// The last record runs to the node's end, over the strings behind it.
-		assert_eq!(records[1].len(), 21);
+		assert_eq!(participants[1].body().len(), 5);
 
 		let Node::Groups(groups) = &nodes[4] else {
 			panic!("expected groups, got {:?}", nodes[4]);
@@ -528,6 +616,7 @@ mod test {
 			b"CTDS",
 			scene(
 				"ffxiv/wil_w1/twn/w1t2/level/w1t2",
+				[0.0; 3],
 				&[[1, 2]],
 				&[0xFE80_0000],
 			),

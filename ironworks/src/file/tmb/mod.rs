@@ -202,7 +202,9 @@ pub struct Actor {
 
 	ability_delay: i32,
 
-	unknown_2: i32,
+	/// The `CTAL` participant the actor stands for, where the timeline is a cutscene's. Zero in a
+	/// `.pap`, which drives whoever plays it.
+	participant: u32,
 
 	#[br(parse_with = offset_ids, args(base))]
 	#[getset(skip)]
@@ -264,8 +266,7 @@ pub struct Condition {
 	float: f32,
 }
 
-/// What one curve of a set drives. The tags run `@ABCDE` then skip `F` for `GHI`, and the slot `F`
-/// would take never appears in a file the game ships.
+/// One component of the transform block, which is block four of a curve's tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
 	TranslationX,
@@ -305,17 +306,24 @@ pub struct Key {
 	pub(super) value: f32,
 }
 
-/// One curve of a set: the channel it drives and the keys along it.
+/// One curve of a set: what it drives and the keys along it.
 #[derive(Debug, Clone, Getters, CopyGetters)]
 pub struct Curve {
+	/// Which block of the target the curve drives in its top four bits, and which component of
+	/// that block in the rest.
 	#[get_copy = "pub"]
-	channel: Channel,
+	tag: u8,
 
 	#[getset(skip)]
 	keys: Vec<Key>,
 }
 
 impl Curve {
+	/// The transform component the curve drives, where its block is the transform.
+	pub fn channel(&self) -> Option<Channel> {
+		Channel::of(self.tag)
+	}
+
 	/// The keys, ascending by time.
 	pub fn keys(&self) -> &[Key] {
 		&self.keys
@@ -375,9 +383,12 @@ impl Curves {
 		&self.curves
 	}
 
-	/// The curve driving one channel, where the set holds one.
+	/// The first curve driving one transform component. A cutscene camera repeats the transform
+	/// block, so the later blocks are only reachable through [`Self::curves`].
 	pub fn channel(&self, held: Channel) -> Option<&Curve> {
-		self.curves.iter().find(|curve| curve.channel == held)
+		self.curves
+			.iter()
+			.find(|curve| curve.channel() == Some(held))
 	}
 }
 
@@ -642,31 +653,30 @@ fn offset_curves<R: Read + Seek>(
 	// contiguously behind the table.
 	let mut curves = Vec::new();
 	for (index, record) in records.iter().enumerate() {
-		let Some(channel) = Channel::of(record[4]) else {
-			continue;
-		};
 		let at = i32::from_le_bytes([record[8], record[9], record[10], record[11]]);
-		let keys = u32::from_le_bytes([record[12], record[13], record[14], record[15]]);
-		if at == 0 || keys == 0 {
-			continue;
-		}
+		let count = u32::from_le_bytes([record[12], record[13], record[14], record[15]]);
 		let held = start + index as u64 * 16;
-		let Ok(from) = u64::try_from(held as i64 + i64::from(at)) else {
-			continue;
-		};
-		reader.seek(SeekFrom::Start(from))?;
-		let mut along = Vec::with_capacity(keys as usize);
-		for _ in 0..keys {
-			let held = <[u8; 24]>::read_options(reader, endian, ())?;
-			let float = |at: usize| f32::from_le_bytes([held[at], held[at + 1], held[at + 2], held[at + 3]]);
-			along.push(Key {
-				time: float(4),
-				value: float(12),
-			});
+
+		let mut keys = Vec::new();
+		if at != 0
+			&& count != 0
+			&& let Ok(from) = u64::try_from(held as i64 + i64::from(at))
+		{
+			reader.seek(SeekFrom::Start(from))?;
+			keys.reserve(count as usize);
+			for _ in 0..count {
+				let held = <[u8; 24]>::read_options(reader, endian, ())?;
+				let float =
+					|at: usize| f32::from_le_bytes([held[at], held[at + 1], held[at + 2], held[at + 3]]);
+				keys.push(Key {
+					time: float(4),
+					value: float(12),
+				});
+			}
 		}
 		curves.push(Curve {
-			channel,
-			keys: along,
+			tag: record[4],
+			keys,
 		});
 	}
 	reader.seek(SeekFrom::Start(resume))?;
