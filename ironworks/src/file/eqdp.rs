@@ -111,7 +111,7 @@ impl Slot {
 	}
 }
 
-#[allow(dead_code, clippy::identity_op, clippy::unnecessary_cast)]
+#[allow(dead_code, unused_parens, clippy::identity_op, clippy::unnecessary_cast)]
 mod bitfield {
 	use binrw::BinRead;
 	use modular_bitfield::prelude::*;
