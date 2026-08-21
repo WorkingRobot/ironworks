@@ -121,12 +121,22 @@ mod test {
 			bytes.extend(name);
 		}
 
-		// One repeating transform, moving two of the scene's instances.
 		bytes.resize(handlers + 0x24, 0);
 		bytes.extend(8i32.to_le_bytes());
-		bytes.extend(1i32.to_le_bytes());
-		bytes.extend(4i32.to_le_bytes());
+		bytes.extend(2i32.to_le_bytes());
+		bytes.extend(8i32.to_le_bytes());
+		bytes.extend(48i32.to_le_bytes());
 
+		// A turn about one axis, on one of the scene's instances.
+		let record = bytes.len();
+		bytes.extend(2i32.to_le_bytes());
+		bytes.resize(record + 16, 0);
+		bytes.extend(12i32.to_le_bytes());
+		bytes.extend(1i32.to_le_bytes());
+		bytes.extend((-450.0f32).to_le_bytes());
+		bytes.resize(record + 40, 0);
+
+		// One repeating transform, moving two of the scene's instances.
 		let record = bytes.len();
 		bytes.extend(5i32.to_le_bytes());
 		bytes.resize(record + 16, 0);
@@ -201,6 +211,16 @@ mod test {
 		assert!(animation.rotation().active());
 		assert_eq!(animation.rotation().period(), 360);
 		assert!(!animation.scale().active());
+	}
+
+	#[test]
+	fn reads_the_turn_a_scene_never_stops() {
+		let file = SharedGroupFile::read(Cursor::new(build(b"SGB1", 0))).unwrap();
+		let [spin] = file.scene().spins() else {
+			panic!("expected one turn")
+		};
+		assert_eq!((spin.instance(), spin.axis()), (12, 1));
+		assert_eq!(spin.period(), -450.0);
 	}
 
 	/// The older files pad ahead of the section and put two empty fields ahead of its body.

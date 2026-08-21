@@ -29,8 +29,10 @@ const ANIMATED: usize = 8;
 /// Where the animation handler list sits inside the block the header's ninth slot names.
 const HANDLERS: usize = 0x24;
 
-/// The one handler kind whose body is read: a transform the scene repeats forever.
+/// The two handler kinds whose bodies are read: a transform the scene repeats forever, and a turn
+/// about one axis it never stops.
 const REPEAT: i32 = 5;
+const SPIN: i32 = 2;
 
 /// An environment the scene applies over part of itself.
 #[derive(Debug, Getters, CopyGetters)]
@@ -141,6 +143,22 @@ pub struct SceneAnimation {
 	scale: Lane,
 }
 
+/// A turn about one axis the scene never stops, on top of wherever the file placed the instance it
+/// names. Unlike a repeating transform it states no reach: it always comes round to where it began.
+#[derive(Debug, Clone, Copy, CopyGetters)]
+#[get_copy = "pub"]
+pub struct SceneSpin {
+	/// The instance of this scene the turn moves.
+	instance: u32,
+
+	/// Which of the instance's own axes it turns about: nought for x, one for y, two for z.
+	axis: u32,
+
+	/// How long one whole turn takes, in the ticks a scene timeline is keyed in, negative where the
+	/// turn runs the other way.
+	period: f32,
+}
+
 /// One lane of a repeating motion.
 #[derive(Debug, Clone, Copy, CopyGetters)]
 #[get_copy = "pub"]
@@ -196,6 +214,25 @@ impl SceneAnimation {
 			translation: lane(0)?,
 			rotation: lane(1)?,
 			scale: lane(2)?,
+		}))
+	}
+}
+
+impl SceneSpin {
+	/// The turns a scene never stops, for a caller that has only an `Option<&Scene>`.
+	pub fn of(scene: &Scene) -> &[Self] {
+		scene.spins()
+	}
+
+	/// Reads the handler at `at`, or nothing where its kind is one whose body is not read.
+	fn parse(bytes: &[u8], at: usize) -> Result<Option<Self>> {
+		if i32_at(bytes, at)? != SPIN {
+			return Ok(None);
+		}
+		Ok(Some(Self {
+			instance: i32_at(bytes, at + 16)? as u32,
+			axis: i32_at(bytes, at + 20)? as u32,
+			period: f32::from_bits(i32_at(bytes, at + 24)? as u32),
 		}))
 	}
 }
@@ -267,6 +304,9 @@ pub struct Scene {
 
 	#[getset(skip)]
 	animations: Vec<SceneAnimation>,
+
+	#[getset(skip)]
+	spins: Vec<SceneSpin>,
 }
 
 impl Scene {
@@ -293,6 +333,11 @@ impl Scene {
 	/// The motions the scene repeats on its own, in the order it names them.
 	pub fn animations(&self) -> &[SceneAnimation] {
 		&self.animations
+	}
+
+	/// The turns the scene never stops, in the order it names them.
+	pub fn spins(&self) -> &[SceneSpin] {
+		&self.spins
 	}
 
 	/// The general block a slot at a time, for a reader that wants what is not named yet.
@@ -365,21 +410,29 @@ impl Scene {
 			}
 		};
 
-		// The handlers sit inside a block the last slot names, past a table nothing has identified.
-		// A scene that repeats nothing still lays the block out, with the count at nought.
-		let animations = match offsets[8] > 0 {
+		// The handlers sit inside a block the ninth slot names, past a table nothing has identified.
+		// A scene that animates nothing still lays the block out, with the count at nought. Doors,
+		// choices and lights are laid out here too, each with a body of its own that nothing reads.
+		let handlers: Vec<usize> = match offsets[8] > 0 {
 			false => Vec::new(),
 			true => {
 				let list = seek(body, offsets[8])? + HANDLERS;
 				let entries = seek(list, i32_at(bytes, list)?)?;
 				(0..count(i32_at(bytes, list + 4)?, entries, size_of::<i32>())?)
 					.filter_map(|index| {
-						let at = seek(entries, i32_at(bytes, entries + index * 4).ok()?).ok()?;
-						SceneAnimation::parse(bytes, at).ok().flatten()
+						seek(entries, i32_at(bytes, entries + index * 4).ok()?).ok()
 					})
 					.collect()
 			}
 		};
+		let animations = handlers
+			.iter()
+			.filter_map(|&at| SceneAnimation::parse(bytes, at).ok().flatten())
+			.collect();
+		let spins = handlers
+			.iter()
+			.filter_map(|&at| SceneSpin::parse(bytes, at).ok().flatten())
+			.collect();
 
 		let general = seek(body, offsets[2])?;
 		let path = |offset| -> Result<String> {
@@ -418,6 +471,7 @@ impl Scene {
 			filters,
 			timelines,
 			animations,
+			spins,
 		})
 	}
 }
