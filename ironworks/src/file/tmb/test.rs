@@ -451,7 +451,7 @@ fn curves_are_reached_four_bytes_past_the_usual_base() {
 	let Item::Curves(found) = &file.items()[1] else {
 		panic!("not a curve set")
 	};
-	assert_eq!((found.id(), found.unknown_a(), found.end()), (2, 1, 36));
+	assert_eq!((found.id(), found.targets(), found.end()), (2, 1, 36));
 	let channels: Vec<Option<Channel>> = found.curves().iter().map(Curve::channel).collect();
 	assert_eq!(
 		channels,
@@ -498,6 +498,59 @@ fn a_curve_outside_the_transform_block_keeps_its_tag() {
 	assert_eq!(found.curves()[0].tag(), 0x74);
 	assert_eq!(found.curves()[0].channel(), None);
 	assert_eq!(found.curves()[0].keys()[0].value(), 35.0);
+}
+
+/// A span runs as a cubic Hermite over the slopes its two keys carry, unless the key it leaves
+/// says to run straight.
+#[test]
+fn a_span_reads_as_a_cubic_unless_its_first_key_says_otherwise() {
+	let mut build = Builder::default();
+	let curves = build.pool(&{
+		let mut bytes = vec![0xEE; 4];
+		bytes.extend([0; 4]);
+		bytes.extend([0x40, 0, 0, 0]);
+		bytes.extend(16i32.to_le_bytes());
+		bytes.extend(3u32.to_le_bytes());
+		for (linear, time, rate, value, into, out) in [
+			(0u32, 0.0f32, 0.1f32, 0.0f32, 0.0f32, 2.0f32),
+			(1, 10.0, 0.1, 10.0, 1.0, 0.0),
+			(0, 20.0, 0.0, 4.0, 0.0, 0.0),
+		] {
+			bytes.extend(linear.to_le_bytes());
+			bytes.extend(time.to_le_bytes());
+			bytes.extend(rate.to_le_bytes());
+			bytes.extend(value.to_le_bytes());
+			bytes.extend(into.to_le_bytes());
+			bytes.extend(out.to_le_bytes());
+		}
+		bytes
+	});
+
+	build.item(b"TMDH", header(1, 60), &[]);
+
+	let mut curve = Vec::new();
+	curve.extend(2i16.to_le_bytes());
+	curve.extend(0i16.to_le_bytes());
+	curve.extend([0; 4]);
+	curve.extend(1u32.to_le_bytes());
+	curve.extend([0; 12]);
+	build.item(b"TMFC", curve, &[(4, curves)]);
+
+	let file = Timeline::read(Cursor::new(build.build())).unwrap();
+	let Item::Curves(found) = &file.items()[1] else {
+		panic!("not a curve set")
+	};
+	let curve = &found.curves()[0];
+	assert!(!curve.keys()[0].linear());
+	assert!(curve.keys()[1].linear());
+
+	// The cubic basis at a quarter along a ten frame span, over slopes 2.0 out and 1.0 in.
+	assert_eq!(curve.at(2.5), Some(3.90625));
+	assert_eq!(curve.at(12.5), Some(8.5));
+	// Held at both ends, and at the last key itself.
+	assert_eq!(curve.at(-5.0), Some(0.0));
+	assert_eq!(curve.at(20.0), Some(4.0));
+	assert_eq!(curve.at(100.0), Some(4.0));
 }
 
 #[test]

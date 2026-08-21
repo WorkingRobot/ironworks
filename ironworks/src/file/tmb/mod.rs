@@ -302,24 +302,40 @@ impl Channel {
 #[derive(Debug, Clone, Copy, CopyGetters)]
 #[get_copy = "pub"]
 pub struct Key {
+	/// Whether the span leaving this key runs straight rather than as a cubic.
+	pub(super) linear: bool,
+
 	pub(super) time: f32,
+
+	/// One over the span to the next key, and zero at the last one.
+	pub(super) rate: f32,
+
 	pub(super) value: f32,
+
+	/// The slope the curve arrives at this key with, in value per frame.
+	pub(super) slope_in: f32,
+
+	/// The slope it leaves with.
+	pub(super) slope_out: f32,
 }
 
 /// One curve of a set: what it drives and the keys along it.
 #[derive(Debug, Clone, Getters, CopyGetters)]
+#[get_copy = "pub"]
 pub struct Curve {
-	/// Which block of the target the curve drives in its top four bits, and which component of
-	/// that block in the rest.
-	#[get_copy = "pub"]
+	/// Which of the target's channels the curve drives in its low six bits, and which node the
+	/// target stands for in the rest.
 	tag: u8,
+
+	/// Which of the set's targets the curve drives, or `0xff` where it drives the set itself.
+	target: u8,
 
 	#[getset(skip)]
 	keys: Vec<Key>,
 }
 
 impl Curve {
-	/// The transform component the curve drives, where its block is the transform.
+	/// The transform component the curve drives, where its channel is one of them.
 	pub fn channel(&self) -> Option<Channel> {
 		Channel::of(self.tag)
 	}
@@ -329,22 +345,35 @@ impl Curve {
 		&self.keys
 	}
 
-	/// What the curve reads at a time, held at its ends and straight between its keys.
+	/// What the curve reads at a time, held at its ends.
+	///
+	/// A span runs straight where its first key says so, and as a cubic Hermite over the slopes its
+	/// two keys carry otherwise.
 	pub fn at(&self, time: f32) -> Option<f32> {
-		let last = self.keys.last()?;
-		if time >= last.time {
-			return Some(last.value);
-		}
 		let first = self.keys.first()?;
-		if time <= first.time {
+		if time < first.time || self.keys.len() < 2 {
 			return Some(first.value);
 		}
-		let at = self.keys.windows(2).find(|pair| time < pair[1].time)?;
-		let span = at[1].time - at[0].time;
-		Some(match span > 0.0 {
-			true => at[0].value + (at[1].value - at[0].value) * (time - at[0].time) / span,
-			false => at[0].value,
-		})
+		let Some(span) = self
+			.keys
+			.windows(2)
+			.find(|span| time >= span[0].time && time < span[1].time)
+		else {
+			return self.keys.last().map(Key::value);
+		};
+
+		let (from, to) = (&span[0], &span[1]);
+		let along = (time - from.time) * from.rate;
+		if from.linear {
+			return Some(from.value + (to.value - from.value) * along);
+		}
+		Some(
+			from.value
+				+ (3.0 - 2.0 * along) * along * along * (to.value - from.value)
+				+ (along - 1.0)
+					* (time - from.time)
+					* ((along - 1.0) * from.slope_out + along * to.slope_in),
+		)
 	}
 }
 
@@ -364,7 +393,8 @@ pub struct Curves {
 	#[br(temp)]
 	curve_count: u32,
 
-	unknown_a: i32,
+	/// How many nodes the set drives, which its curves name by index.
+	targets: u32,
 
 	/// Where the curve region ends, relative to the same place the curves themselves are reached
 	/// from. Equal to the curve offset in the files whose keyframes precede their curves.
@@ -671,13 +701,18 @@ fn offset_curves<R: Read + Seek>(
 				let float =
 					|at: usize| f32::from_le_bytes([held[at], held[at + 1], held[at + 2], held[at + 3]]);
 				keys.push(Key {
+					linear: held[..4] != [0; 4],
 					time: float(4),
+					rate: float(8),
 					value: float(12),
+					slope_in: float(16),
+					slope_out: float(20),
 				});
 			}
 		}
 		curves.push(Curve {
 			tag: record[4],
+			target: record[6],
 			keys,
 		});
 	}
