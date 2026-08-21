@@ -375,6 +375,41 @@ fn a_visual_effect_reads_its_path_and_vectors() {
 	assert_eq!(timeline.path(), Some("vfx/replace_me.avfx"));
 }
 
+/// A cutscene camera, which names its curves by the id of a set beside it.
+#[test]
+fn a_camera_reads_its_planes_and_the_set_it_drives() {
+	let mut build = Builder::default();
+	let name = build.pool(b"c01\0");
+
+	build.item(b"TMDH", header(1, 160), &[]);
+
+	let mut camera = Vec::new();
+	camera.extend(10i16.to_le_bytes());
+	camera.extend(0i16.to_le_bytes());
+	camera.extend(160i32.to_le_bytes());
+	camera.extend(460761i32.to_le_bytes());
+	camera.extend(15i32.to_le_bytes());
+	camera.extend([0; 4]);
+	camera.extend(0.1f32.to_le_bytes());
+	camera.extend(1000.0f32.to_le_bytes());
+	camera.extend(0xff00_0006u32.to_le_bytes());
+	camera.resize(96, 0xFF);
+	build.item(b"C004", camera, &[(16, name)]);
+
+	let file = Timeline::read(Cursor::new(build.build())).unwrap();
+	let Item::Command(command) = &file.items()[1] else {
+		panic!("not a command")
+	};
+	let CommandKind::C004(camera) = command.kind() else {
+		panic!("not a camera")
+	};
+	assert_eq!(camera.name(), Some("c01"));
+	assert_eq!(camera.duration(), 160);
+	assert_eq!(camera.curve_id(), 15);
+	assert_eq!((camera.near_plane(), camera.far_plane()), (0.1, 1000.0));
+	assert_eq!(camera.bindings()[0], 0xff00_0006);
+}
+
 /// A `TMFC` reaches its curves from four bytes past the base every other item uses, so a reader
 /// sharing the usual base lands short of the first record.
 #[test]
@@ -417,10 +452,52 @@ fn curves_are_reached_four_bytes_past_the_usual_base() {
 		panic!("not a curve set")
 	};
 	assert_eq!((found.id(), found.unknown_a(), found.end()), (2, 1, 36));
-	let channels: Vec<Channel> = found.curves().iter().map(Curve::channel).collect();
-	assert_eq!(channels, [Channel::TranslationX, Channel::TranslationY]);
+	let channels: Vec<Option<Channel>> = found.curves().iter().map(Curve::channel).collect();
+	assert_eq!(
+		channels,
+		[Some(Channel::TranslationX), Some(Channel::TranslationY)]
+	);
 	assert_eq!(found.curves()[0].keys()[0].value(), 1.5);
 	assert_eq!(found.curves()[1].keys()[0].time(), 2.0);
+}
+
+/// A cutscene camera drives blocks the transform channels do not cover, so a curve outside them
+/// has to survive with its tag rather than be dropped.
+#[test]
+fn a_curve_outside_the_transform_block_keeps_its_tag() {
+	let mut build = Builder::default();
+	let curves = build.pool(&{
+		let mut bytes = vec![0xEE; 4];
+		bytes.extend([0; 4]);
+		bytes.extend([0x74, 0, 0, 0]);
+		bytes.extend(16i32.to_le_bytes());
+		bytes.extend(1u32.to_le_bytes());
+		bytes.extend([0; 4]);
+		bytes.extend(0.0f32.to_le_bytes());
+		bytes.extend([0; 4]);
+		bytes.extend(35.0f32.to_le_bytes());
+		bytes.extend([0; 8]);
+		bytes
+	});
+
+	build.item(b"TMDH", header(1, 60), &[]);
+
+	let mut curve = Vec::new();
+	curve.extend(2i16.to_le_bytes());
+	curve.extend(0i16.to_le_bytes());
+	curve.extend([0; 4]);
+	curve.extend(1u32.to_le_bytes());
+	curve.extend([0; 12]);
+	build.item(b"TMFC", curve, &[(4, curves)]);
+
+	let file = Timeline::read(Cursor::new(build.build())).unwrap();
+	let Item::Curves(found) = &file.items()[1] else {
+		panic!("not a curve set")
+	};
+	assert_eq!(found.curves().len(), 1);
+	assert_eq!(found.curves()[0].tag(), 0x74);
+	assert_eq!(found.curves()[0].channel(), None);
+	assert_eq!(found.curves()[0].keys()[0].value(), 35.0);
 }
 
 #[test]
