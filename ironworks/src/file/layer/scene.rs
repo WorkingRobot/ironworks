@@ -26,6 +26,12 @@ const FILTER: usize = 28;
 const TIMELINE: usize = 36;
 const ANIMATED: usize = 8;
 
+/// Where the animation handler list sits inside the block the header's ninth slot names.
+const HANDLERS: usize = 0x24;
+
+/// The one handler kind whose body is read: a transform the scene repeats forever.
+const REPEAT: i32 = 5;
+
 /// An environment the scene applies over part of itself.
 #[derive(Debug, Getters, CopyGetters)]
 pub struct Environment {
@@ -118,6 +124,98 @@ impl SceneTimeline {
 	}
 }
 
+/// A motion the scene repeats on its own, with no timeline to play it, on top of wherever the file
+/// placed the instances it names.
+///
+/// A scene lists several kinds of these and gives each its own body; only the repeating transform
+/// is read past the kind, so doors, paths and clocks are skipped.
+#[derive(Debug, Getters, CopyGetters)]
+#[get = "pub"]
+pub struct SceneAnimation {
+	/// The instances of this scene the motion moves.
+	#[getset(skip)]
+	instances: Vec<u32>,
+
+	translation: Lane,
+	rotation: Lane,
+	scale: Lane,
+}
+
+/// One lane of a repeating motion.
+#[derive(Debug, Clone, Copy, CopyGetters)]
+#[get_copy = "pub"]
+pub struct Lane {
+	/// Whether the lane swings at all. One that does not still states where it rests.
+	active: bool,
+
+	/// How far the swing reaches: world units for a translation, radians for a rotation, and a
+	/// factor for a scale, which rests at one rather than at nought.
+	amount: [f32; 4],
+
+	/// How long one swing takes, in the ticks a scene timeline is keyed in.
+	period: u32,
+
+	/// How long the lane waits before its first swing.
+	delay: u32,
+
+	curve: u32,
+
+	/// What the lane does when a swing ends. Nought starts the swing over, which is what a whole
+	/// turn wants; the rest swing back.
+	wrap: u32,
+}
+
+impl SceneAnimation {
+	/// The motions a scene repeats, for a caller that has only an `Option<&Scene>`.
+	pub fn of(scene: &Scene) -> &[Self] {
+		scene.animations()
+	}
+
+	/// Each instance of this scene the motion moves.
+	pub fn instances(&self) -> &[u32] {
+		&self.instances
+	}
+
+	/// Reads the handler at `at`, or nothing where its kind is one whose body is not read.
+	fn parse(bytes: &[u8], at: usize) -> Result<Option<Self>> {
+		if i32_at(bytes, at)? != REPEAT {
+			return Ok(None);
+		}
+		let ids = seek(at, i32_at(bytes, at + 16)?)?;
+		let count = usize::try_from(i32_at(bytes, at + 20)?)
+			.map_err(|_| invalid(format!("a handler at {at:#x} moving a negative count")))?;
+		let instances = bytes
+			.get(ids..ids.saturating_add(count))
+			.ok_or_else(|| invalid(format!("a handler at {at:#x} reaching past the file")))?
+			.iter()
+			.map(|&held| u32::from(held))
+			.collect();
+		let lane = |slot: usize| Lane::parse(bytes, seek(at, i32_at(bytes, at + 32 + slot * 4)?)?);
+		Ok(Some(Self {
+			instances,
+			translation: lane(0)?,
+			rotation: lane(1)?,
+			scale: lane(2)?,
+		}))
+	}
+}
+
+impl Lane {
+	fn parse(bytes: &[u8], at: usize) -> Result<Self> {
+		let float = |offset| -> Result<f32> {
+			Ok(f32::from_bits(i32_at(bytes, at + offset)? as u32))
+		};
+		Ok(Self {
+			active: i32_at(bytes, at)? != 0,
+			amount: [float(4)?, float(8)?, float(12)?, float(16)?],
+			period: i32_at(bytes, at + 20)? as u32,
+			delay: i32_at(bytes, at + 24)? as u32,
+			curve: i32_at(bytes, at + 28)? as u32,
+			wrap: i32_at(bytes, at + 32)? as u32,
+		})
+	}
+}
+
 /// A place the scene is used from. Several territories can share one scene, and each names the
 /// layers it turns on through one of these.
 #[derive(Debug, Clone, Copy, CopyGetters)]
@@ -166,6 +264,9 @@ pub struct Scene {
 
 	#[getset(skip)]
 	timelines: Vec<SceneTimeline>,
+
+	#[getset(skip)]
+	animations: Vec<SceneAnimation>,
 }
 
 impl Scene {
@@ -187,6 +288,11 @@ impl Scene {
 	/// What the scene animates, in the order it names them.
 	pub fn timelines(&self) -> &[SceneTimeline] {
 		&self.timelines
+	}
+
+	/// The motions the scene repeats on its own, in the order it names them.
+	pub fn animations(&self) -> &[SceneAnimation] {
+		&self.animations
 	}
 
 	/// The general block a slot at a time, for a reader that wants what is not named yet.
@@ -259,6 +365,22 @@ impl Scene {
 			}
 		};
 
+		// The handlers sit inside a block the last slot names, past a table nothing has identified.
+		// A scene that repeats nothing still lays the block out, with the count at nought.
+		let animations = match offsets[8] > 0 {
+			false => Vec::new(),
+			true => {
+				let list = seek(body, offsets[8])? + HANDLERS;
+				let entries = seek(list, i32_at(bytes, list)?)?;
+				(0..count(i32_at(bytes, list + 4)?, entries, size_of::<i32>())?)
+					.filter_map(|index| {
+						let at = seek(entries, i32_at(bytes, entries + index * 4).ok()?).ok()?;
+						SceneAnimation::parse(bytes, at).ok().flatten()
+					})
+					.collect()
+			}
+		};
+
 		let general = seek(body, offsets[2])?;
 		let path = |offset| -> Result<String> {
 			Ok(string(
@@ -295,6 +417,7 @@ impl Scene {
 			environments,
 			filters,
 			timelines,
+			animations,
 		})
 	}
 }

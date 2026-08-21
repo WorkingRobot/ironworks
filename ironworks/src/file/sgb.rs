@@ -66,6 +66,7 @@ mod test {
 		let instance_table = layer + LAYER_HEADER;
 		let first = instance_table + 4;
 		let names = first + 0x30 + 44;
+		let handlers = names + NAMES.iter().map(|name| name.len()).sum::<usize>();
 
 		let mut offsets = [0i32; 16];
 		offsets[0] = (heap - body) as i32;
@@ -73,6 +74,7 @@ mod test {
 		offsets[2] = (general - body) as i32;
 		offsets[5] = (resources - body) as i32;
 		offsets[6] = 1;
+		offsets[8] = (handlers - body) as i32;
 		bytes.extend(offsets.map(i32::to_le_bytes).concat());
 
 		let name = |index: usize| {
@@ -118,6 +120,36 @@ mod test {
 		for name in NAMES {
 			bytes.extend(name);
 		}
+
+		// One repeating transform, moving two of the scene's instances.
+		bytes.resize(handlers + 0x24, 0);
+		bytes.extend(8i32.to_le_bytes());
+		bytes.extend(1i32.to_le_bytes());
+		bytes.extend(4i32.to_le_bytes());
+
+		let record = bytes.len();
+		bytes.extend(5i32.to_le_bytes());
+		bytes.resize(record + 16, 0);
+		bytes.extend(44i32.to_le_bytes());
+		bytes.extend(2i32.to_le_bytes());
+		bytes.resize(record + 32, 0);
+		bytes.extend(48i32.to_le_bytes());
+		bytes.extend(84i32.to_le_bytes());
+		bytes.extend(120i32.to_le_bytes());
+		bytes.extend([11, 12, 0, 0]);
+
+		let lane = |active: i32, amount: [f32; 4], period: i32, wrap: i32| {
+			let mut held = Vec::from(active.to_le_bytes());
+			held.extend(amount.map(f32::to_le_bytes).concat());
+			held.extend(period.to_le_bytes());
+			held.extend(0i32.to_le_bytes());
+			held.extend(0i32.to_le_bytes());
+			held.extend(wrap.to_le_bytes());
+			held
+		};
+		bytes.extend(lane(1, [0.0, -1.0, 0.0, 0.0], 180, 1));
+		bytes.extend(lane(1, [0.0, std::f32::consts::TAU, 0.0, 0.0], 360, 0));
+		bytes.extend(lane(0, [1.0, 1.0, 1.0, 0.0], 30, 0));
 		bytes
 	}
 
@@ -152,6 +184,23 @@ mod test {
 			layer.instances()[0].data(),
 			InstanceData::BgPart(_)
 		));
+	}
+
+	#[test]
+	fn reads_the_motion_a_scene_repeats_on_its_own() {
+		let file = SharedGroupFile::read(Cursor::new(build(b"SGB1", 0))).unwrap();
+		let [animation] = file.scene().animations() else {
+			panic!("expected one repeating motion")
+		};
+		assert_eq!(animation.instances(), &[11, 12]);
+		assert_eq!(animation.translation().amount(), [0.0, -1.0, 0.0, 0.0]);
+		assert_eq!(
+			(animation.translation().period(), animation.translation().wrap()),
+			(180, 1)
+		);
+		assert!(animation.rotation().active());
+		assert_eq!(animation.rotation().period(), 360);
+		assert!(!animation.scale().active());
 	}
 
 	/// The older files pad ahead of the section and put two empty fields ahead of its body.

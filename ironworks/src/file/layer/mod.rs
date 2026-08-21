@@ -9,7 +9,7 @@ mod instance;
 mod scene;
 
 #[cfg(any(feature = "sgb", feature = "lvb"))]
-pub use scene::{Scene, SceneTimeline};
+pub use scene::{Lane, Scene, SceneAnimation, SceneTimeline};
 
 pub use instance::{
 	Aetheryte, AnimationState, BgPart, ChairKind, ChairMarker, Character, ClientPath, CollisionBox,
