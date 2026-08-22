@@ -172,6 +172,15 @@ commands! {
 	C002 { duration: i32, unknown_1: i32, unknown_2: i32, #[getset(skip)] path: Option<String> }
 
 	/// The camera a shot runs through, usable only from a `.cutb`.
+	///
+	/// Where the camera stands, what it looks at and how it is set up all come from the curve set
+	/// below rather than from this body. Targets 2 and 4 are the eye and the point it looks at, and
+	/// the set's own channels - the ones at `0x30` and up - are the camera itself:
+	///
+	/// - `0x34` is a focal length in millimetres, which the game turns into a vertical field of
+	///   view as `2 * atan(7.0015101 / focal)` against a frame it fixes at sixteen by nine.
+	/// - `0x35` is the roll, in degrees, applied the other way round.
+	/// - `0x37` and `0x38` are two strengths and `0x39` a distance, which together focus the blur.
 	C004 {
 		duration: i32,
 		unknown_1: i32,

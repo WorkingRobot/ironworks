@@ -23,7 +23,7 @@ const SUN_TILT: usize = 4;
 const FILTER: usize = 28;
 
 /// One entry of the timeline list, and one of the instance pairs a timeline names.
-const TIMELINE: usize = 36;
+const TIMELINE: usize = 44;
 const ANIMATED: usize = 8;
 
 /// Where the animation handler list sits inside the block the header's ninth slot names.
@@ -63,7 +63,7 @@ pub struct SceneTimeline {
 	#[get_copy = "pub"]
 	sub_id: i32,
 
-	/// What the timeline does when it reaches its end, as the file spells it: `loop` and so on.
+	/// What the timeline is for, as the file names it: `opened`, `Panel8_hide_a`, `Color`.
 	#[get = "pub"]
 	kind: String,
 
