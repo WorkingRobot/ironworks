@@ -34,7 +34,7 @@ mod test {
 	fn build(magic: &[u8; 4], pad: usize) -> Vec<u8> {
 		const LAYER_HEADER: usize = 52;
 		const GENERAL: usize = 92;
-		const NAMES: [&[u8]; 8] = [
+		const NAMES: [&[u8]; 10] = [
 			b"group\0",
 			b"layer\0",
 			b"bg/dir\0",
@@ -43,7 +43,13 @@ mod test {
 			b"a.envb\0",
 			b"a.essb\0",
 			b"a.lgb\0",
+			b"first\0",
+			b"second\0",
 		];
+		/// What the handler block spends, so the timelines can follow it.
+		const BLOCK: usize = 248;
+		/// A timeline region: a `TMLB` holding one `TMDH`.
+		const TMLB: usize = 28;
 
 		let mut bytes = Vec::from(*magic);
 		bytes.extend(0u32.to_le_bytes());
@@ -66,11 +72,15 @@ mod test {
 		let first = instance_table + 4;
 		let names = first + 0x30 + 44;
 		let handlers = names + NAMES.iter().map(|name| name.len()).sum::<usize>();
+		let timelines = handlers + BLOCK;
+		let entries = timelines + 2 * TMLB + 8;
+		let pairs = entries + 88;
 
 		let mut offsets = [0i32; 16];
 		offsets[0] = (heap - body) as i32;
 		offsets[1] = 1;
 		offsets[2] = (general - body) as i32;
+		offsets[4] = (timelines + 2 * TMLB - body) as i32;
 		offsets[5] = (resources - body) as i32;
 		offsets[6] = 1;
 		offsets[8] = (handlers - body) as i32;
@@ -159,7 +169,59 @@ mod test {
 		bytes.extend(lane(1, [0.0, -1.0, 0.0, 0.0], 180, 1));
 		bytes.extend(lane(1, [0.0, std::f32::consts::TAU, 0.0, 0.0], 360, 0));
 		bytes.extend(lane(0, [1.0, 1.0, 1.0, 0.0], 30, 0));
+
+		// Two timelines, each with a region of its own ahead of the record that names it, so a
+		// record read at the wrong stride reaches the other one's bytes.
+		for duration in [480i16, 120] {
+			bytes.extend(*b"TMLB");
+			bytes.extend((TMLB as u32).to_le_bytes());
+			bytes.extend(1u32.to_le_bytes());
+			bytes.extend(*b"TMDH");
+			bytes.extend(16u32.to_le_bytes());
+			bytes.extend([1i16, 0, duration, 3].map(i16::to_le_bytes).concat());
+		}
+		bytes.extend(8i32.to_le_bytes());
+		bytes.extend(2i32.to_le_bytes());
+
+		for (index, (sub_id, auto, looping)) in [(5i32, 1u8, 0u8), (9, 0, 1)].iter().enumerate() {
+			let record = entries + index * 44;
+			bytes.extend(sub_id.to_le_bytes());
+			bytes.extend((name(8 + index) - record as i32).to_le_bytes());
+			bytes.extend(((pairs + index * 8) as i32 - record as i32).to_le_bytes());
+			bytes.extend(1i32.to_le_bytes());
+			bytes.extend(0i32.to_le_bytes());
+			bytes.extend(((timelines + index * TMLB) as i32 - record as i32).to_le_bytes());
+			bytes.resize(record + 32, 0);
+			bytes.extend([*auto, *looping]);
+			bytes.resize(record + 44, 0);
+		}
+		for instance in [11i32, 12] {
+			bytes.extend(2i32.to_le_bytes());
+			bytes.extend(instance.to_le_bytes());
+		}
 		bytes
+	}
+
+	#[test]
+	fn reads_every_timeline_a_scene_names() {
+		let file = SharedGroupFile::read(Cursor::new(build(b"SGB1", 0))).unwrap();
+		let [first, second] = file.scene().timelines() else {
+			panic!("expected two timelines")
+		};
+		assert_eq!((first.sub_id(), first.kind().as_str()), (5, "first"));
+		assert_eq!((first.auto_play(), first.looping()), (true, false));
+		assert_eq!(first.animated(), &[(2, 11)]);
+		assert_eq!((second.sub_id(), second.kind().as_str()), (9, "second"));
+		assert_eq!((second.auto_play(), second.looping()), (false, true));
+		assert_eq!(second.animated(), &[(2, 12)]);
+
+		let duration = |held: &super::super::layer::SceneTimeline| {
+			held.timeline().items().iter().find_map(|item| match item {
+				crate::file::tmb::Item::Header(header) => Some(header.duration()),
+				_ => None,
+			})
+		};
+		assert_eq!((duration(first), duration(second)), (Some(480), Some(120)));
 	}
 
 	#[test]
