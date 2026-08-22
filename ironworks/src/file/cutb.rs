@@ -33,6 +33,13 @@ const PARTICIPANT_TABLE: u64 = 0x08;
 /// Where a `CTAL` record's unmodelled body starts, past its id and its transform.
 const PARTICIPANT_BODY: u64 = 0x30;
 
+/// Where a `CTEX` starts the table of runs it holds, and how many bytes one entry of it takes.
+const TRACK_TABLE: u64 = 0x28;
+const TRACK: u64 = 24;
+
+/// Where a `CTEX` states how many runs it holds.
+const TRACK_COUNT: u64 = 0x14;
+
 fn invalid(reason: impl Into<String>) -> Error {
 	Error::Invalid(ErrorValue::Other("cutscene".into()), reason.into())
 }
@@ -136,6 +143,9 @@ pub enum Node {
 	/// `CTPA`: groups of twelve-byte records. Their fields are not modelled.
 	Groups(Vec<Group>),
 
+	/// `CTEX`: runs of per-frame scalars.
+	Tracks(Vec<Track>),
+
 	/// `CTTL`: one timeline, in the format `.tmb` files hold.
 	Timeline(Timeline),
 
@@ -227,10 +237,38 @@ impl Group {
 	}
 }
 
+/// One run of per-frame scalars a `CTEX` holds, which a cutscene plays over something the file does
+/// not name.
+#[derive(Debug, CopyGetters)]
+#[get_copy = "pub"]
+pub struct Track {
+	/// Which of a pair of runs this is: one or two.
+	lane: u32,
+
+	/// What the pair of runs belongs to. Nothing else in the file carries the same ids.
+	id: u32,
+
+	unknown_1: u32,
+
+	/// Rises across the node, holding across a pair of lanes.
+	unknown_2: u32,
+
+	#[getset(skip)]
+	values: Vec<f32>,
+}
+
+impl Track {
+	/// The values the run holds, one a frame.
+	pub fn values(&self) -> &[f32] {
+		&self.values
+	}
+}
+
 /// A node whose magic this crate does not model.
 ///
-/// `CTEX` and `CTCB` are the two the game ships. The node table counts a `CTCB`'s records rather
-/// than its bytes, so that one's extent comes from its own header.
+/// `CTCB` is the one the game ships, along with the `CTEX` whose table of runs does not read. The
+/// node table counts a `CTCB`'s records rather than its bytes, so that one's extent comes from its
+/// own header.
 #[derive(Debug, CopyGetters)]
 #[get_copy = "pub"]
 pub struct Unknown {
@@ -266,6 +304,13 @@ fn node(bytes: &[u8], entry: u64) -> Result<Node> {
 		b"CTDS" => Node::Scene(scene(bytes, at)?),
 		b"CTAL" => Node::Participants(participants(bytes, at, size)?),
 		b"CTPA" => Node::Groups(groups(bytes, at)?),
+		b"CTEX" => match tracks(bytes, at, size) {
+			Some(held) => Node::Tracks(held),
+			None => Node::Unknown(Unknown {
+				magic,
+				body: body.to_vec(),
+			}),
+		},
 		// Read over the node alone, so an offset inside the timeline cannot reach another node.
 		b"CTTL" => Node::Timeline(<Timeline as BinRead>::read(&mut Cursor::new(body))?),
 		_ => Node::Unknown(Unknown {
@@ -273,6 +318,51 @@ fn node(bytes: &[u8], entry: u64) -> Result<Node> {
 			body: body.to_vec(),
 		}),
 	})
+}
+
+/// Reads the runs a `CTEX` holds, where its table reads: the entries name where each run starts,
+/// they rise, the first lands where the table ends and the last runs to the node's own end.
+///
+/// A node laying its table out another way reads as no runs at all rather than as the wrong ones.
+fn tracks(bytes: &[u8], at: u64, size: u64) -> Option<Vec<Track>> {
+	let count = u64::from(u32_at(bytes, at + TRACK_COUNT).ok()?);
+	let body = count.checked_mul(TRACK)?.checked_add(TRACK_TABLE)?;
+	if count == 0 || body > size {
+		return None;
+	}
+	let table = at + TRACK_TABLE;
+	let starts = (0..count)
+		.map(|index| Some(u64::from(u32_at(bytes, table + index * TRACK + 4).ok()?)))
+		.collect::<Option<Vec<_>>>()?;
+	let tiles = starts[0] == count * TRACK
+		&& starts.windows(2).all(|held| held[0] < held[1])
+		&& starts.iter().all(|held| held % 4 == 0)
+		&& *starts.last()? < size - TRACK_TABLE;
+	if !tiles {
+		return None;
+	}
+
+	(0..count)
+		.map(|index| {
+			let record = table + index * TRACK;
+			let start = table + starts[index as usize];
+			let end = match starts.get(index as usize + 1) {
+				Some(held) => table + held,
+				None => at + size,
+			};
+			Some(Track {
+				lane: u32_at(bytes, record).ok()?,
+				id: u32_at(bytes, record + 8).ok()?,
+				unknown_1: u32_at(bytes, record + 12).ok()?,
+				unknown_2: u32_at(bytes, record + 16).ok()?,
+				values: region(bytes, start, end - start)
+					.ok()?
+					.chunks_exact(4)
+					.map(|held| f32::from_le_bytes(held.try_into().unwrap()))
+					.collect(),
+			})
+		})
+		.collect()
 }
 
 fn resources(bytes: &[u8], at: u64) -> Result<Vec<Resource>> {
