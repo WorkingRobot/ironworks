@@ -194,6 +194,11 @@ impl File {
 		!self.flags1.waving_animation_disabled()
 	}
 
+	/// Whether the sun casts this model. The header states it as a disable.
+	pub fn shadow(&self) -> bool {
+		!self.flags1.shadow_disabled()
+	}
+
 	/// The bones one table names, as indices into [`Self::bone_name_offsets`]. A span states its
 	/// position in 4 byte units from its own entry, and the shared array follows the entries.
 	pub fn bone_table(&self, index: usize) -> &[u16] {
