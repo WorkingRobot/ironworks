@@ -31,6 +31,11 @@ impl Model {
 		self.file.waving_animation()
 	}
 
+	/// Whether the sun's shadow pass draws this model.
+	pub fn shadowing(&self) -> bool {
+		self.file.shadow()
+	}
+
 	// TODO: Expose mesh kinds
 	// TODO: Maybe mesh filter?
 	// TODO: iterator?
