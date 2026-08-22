@@ -116,6 +116,7 @@ slot!(
 		enabled,
 		hide_elbow,
 		hide_forearm,
+		over_sleeve,
 		show_bracelets,
 		show_ring_left,
 		show_ring_right,
@@ -156,6 +157,36 @@ slot!(
 		uses_vfx_parameter,
 	}
 );
+
+impl Body {
+	/// How far a sleeve claims the arm it shares with a glove. The two compare this against
+	/// [`Hands::cuff_reach`] and the shorter reach gives up its own seam, so a sleeve that
+	/// outreaches the cuff hides the cuff rather than both drawing through each other.
+	pub fn sleeve_reach(&self) -> u8 {
+		u8::from(self.0.hide_gloves_small()) | u8::from(self.0.hide_glove_cuffs()) << 1
+	}
+}
+
+impl Hands {
+	/// How far a cuff claims the arm it shares with a sleeve, against [`Body::sleeve_reach`].
+	pub fn cuff_reach(&self) -> u8 {
+		self.0.over_sleeve().into()
+	}
+}
+
+impl Legs {
+	/// How far a hem claims the leg it shares with a boot, against [`Feet::shaft_reach`].
+	pub fn hem_reach(&self) -> u8 {
+		u8::from(self.0.hide_boots_small()) | u8::from(self.0.hide_boots_medium()) << 1
+	}
+}
+
+impl Feet {
+	/// How far a shaft claims the leg it shares with a hem, against [`Legs::hem_reach`].
+	pub fn shaft_reach(&self) -> u8 {
+		self.0.hide_ankle().into()
+	}
+}
 
 #[allow(dead_code, unused_parens)]
 mod bitfield {
@@ -213,8 +244,7 @@ mod bitfield {
 		pub enabled: bool,
 		pub hide_elbow: bool,
 		pub hide_forearm: bool,
-		#[skip]
-		_unknown_27: bool,
+		pub over_sleeve: bool,
 		pub show_bracelets: bool,
 		pub show_ring_left: bool,
 		pub show_ring_right: bool,
